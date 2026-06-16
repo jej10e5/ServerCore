@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Diff HTML Analyzer"
+  short_description: "Summarize local Git diffs as readable HTML reports."
+  default_prompt: "변경점 분석해줘"

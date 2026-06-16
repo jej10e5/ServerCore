@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>복사·이동 생성자 완전 해부 — TSharedPtr</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d2128; --border:#2a2f3a;
+    --text:#e5e7eb; --muted:#9aa3b2;
+    --blue:#7cc4ff; --amber:#ffd28a; --green:#7ddc9c; --red:#ff8a8a;
+    --purple:#c792ea; --teal:#80cbc4;
+    --kw:#c792ea; --ty:#82aaff; --st:#c3e88d; --nu:#f78c6c; --cm:#5c6370;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:"Pretendard","Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif;
+    line-height:1.7;font-size:16px}
+  .wrap{max-width:980px;margin:0 auto;padding:36px 24px 100px}
+
+  /* Nav */
+  nav{position:sticky;top:0;background:#10141c;border-bottom:1px solid var(--border);
+    padding:10px 24px;z-index:9;overflow-x:auto;white-space:nowrap}
+  nav a{display:inline-block;margin-right:16px;color:var(--muted);font-size:13.5px;
+    text-decoration:none}
+  nav a:hover{color:var(--blue)}
+
+  /* Sections */
+  section{padding-top:12px;margin-top:52px}
+  h2{font-size:22px;margin:0 0 18px;padding-left:14px;
+    border-left:4px solid var(--blue)}
+  h3{font-size:17px;margin:30px 0 10px;color:#cfd6e2}
+  h4{font-size:14.5px;margin:18px 0 8px;color:#bcc3cf;font-weight:600}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:5px 0}
+  hr{border:none;border-top:1px solid var(--border);margin:28px 0}
+
+  /* Code */
+  .filepath{font-family:"Cascadia Code",monospace;font-size:12px;color:#7a9fc4;
+    background:#0b0d12;border:1px solid var(--border);border-radius:4px;
+    padding:2px 8px;display:inline-block;margin-bottom:8px}
+  pre{background:#0b0d12;border:1px solid var(--border);border-radius:10px;
+    padding:16px 18px;overflow-x:auto;margin:8px 0 16px;
+    font-family:"Cascadia Code","Consolas","D2Coding",monospace;
+    font-size:13.5px;line-height:1.6}
+  code{background:#0b0d12;border:1px solid var(--border);padding:1px 6px;
+    border-radius:4px;font-size:13.5px;font-family:"Cascadia Code","Consolas",monospace;
+    color:#e7c794}
+  .kw{color:var(--kw)} .ty{color:var(--ty)} .st{color:var(--st)}
+  .nu{color:var(--nu)} .cm{color:var(--cm);font-style:italic}
+  .hl-b{background:rgba(124,196,255,.12);border-radius:3px;padding:0 3px}
+  .hl-a{background:rgba(255,210,138,.12);border-radius:3px;padding:0 3px}
+  .hl-g{background:rgba(125,220,156,.12);border-radius:3px;padding:0 3px}
+  .hl-r{background:rgba(255,138,138,.12);border-radius:3px;padding:0 3px}
+
+  /* Callout */
+  .box{border-radius:10px;padding:14px 16px;margin:12px 0}
+  .box.blue{background:rgba(124,196,255,.07);border:1px solid rgba(124,196,255,.2)}
+  .box.amber{background:rgba(255,210,138,.07);border:1px solid rgba(255,210,138,.2)}
+  .box.green{background:rgba(125,220,156,.07);border:1px solid rgba(125,220,156,.2)}
+  .box.red{background:rgba(255,138,138,.07);border:1px solid rgba(255,138,138,.2)}
+  .box.gray{background:var(--panel);border:1px solid var(--border)}
+  .box-title{font-weight:700;font-size:13.5px;margin-bottom:6px}
+
+  /* Token table */
+  .tok{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+  .tok th{background:#1a1d26;padding:9px 12px;text-align:left;
+    font-size:12px;letter-spacing:.05em;color:var(--muted);
+    border-bottom:1px solid var(--border)}
+  .tok td{padding:10px 12px;border-bottom:1px solid #1e2230;vertical-align:top}
+  .tok tr:last-child td{border-bottom:none}
+  .tok td:first-child{font-family:"Cascadia Code",monospace;font-size:13.5px;
+    white-space:nowrap}
+
+  /* Sig breakdown bar */
+  .sigbar{background:#0b0d12;border:1px solid var(--border);border-radius:10px;
+    padding:16px;margin:10px 0;font-family:"Cascadia Code",monospace;font-size:14px;
+    overflow-x:auto}
+  .sigbar .fn{display:flex;align-items:flex-start;gap:0;flex-wrap:wrap;line-height:2.2}
+  .tok-box{padding:2px 7px;border-radius:5px;margin:2px 1px;cursor:default;
+    white-space:nowrap;font-size:13.5px;border:1px solid transparent}
+  .tok-box:hover{filter:brightness(1.2)}
+  .t-kw  {background:rgba(199,146,234,.15);border-color:rgba(199,146,234,.3);color:#c792ea}
+  .t-ty  {background:rgba(130,170,255,.15);border-color:rgba(130,170,255,.3);color:#82aaff}
+  .t-ref {background:rgba(255,210,138,.15);border-color:rgba(255,210,138,.3);color:#ffd28a}
+  .t-rref{background:rgba(255,138,138,.15);border-color:rgba(255,138,138,.3);color:#ff8a8a}
+  .t-nm  {background:rgba(125,220,156,.15);border-color:rgba(125,220,156,.3);color:#7ddc9c}
+  .t-punc{color:#7a8599;padding:2px 3px}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 14px;font-size:13px}
+  .legend span{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:3px}
+
+  /* Step list */
+  .steps{list-style:none;padding:0;margin:12px 0;counter-reset:st}
+  .steps li{counter-increment:st;display:grid;grid-template-columns:32px 1fr;
+    gap:10px;align-items:start;margin:10px 0;padding:10px 14px 10px 0;
+    border-bottom:1px solid var(--border)}
+  .steps li:last-child{border-bottom:none}
+  .steps li::before{content:counter(st);width:28px;height:28px;border-radius:50%;
+    background:#1a1d26;border:1px solid var(--border);color:var(--blue);
+    display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:700;flex-shrink:0;margin-top:2px}
+
+  /* Memory diagram */
+  .mem{background:#0b0d12;border:1px solid var(--border);border-radius:10px;
+    padding:18px;margin:12px 0;overflow-x:auto}
+  .mem-row{display:flex;align-items:center;gap:10px;margin:8px 0}
+  .mem-var{background:#1a1d26;border:1px solid var(--border);border-radius:8px;
+    padding:8px 12px;font-family:"Cascadia Code",monospace;font-size:13px;
+    text-align:center;min-width:60px;flex-shrink:0}
+  .mem-obj{background:#1a1d26;border:1px solid var(--border);border-radius:8px;
+    padding:9px 14px;font-family:"Cascadia Code",monospace;font-size:12.5px;flex:1}
+  .mem-arr{color:#4b5466;font-size:18px;flex-shrink:0}
+  .mem-label{font-size:12px;color:var(--muted);margin:6px 0 2px}
+  .mem-sep{border:none;border-top:1px dashed var(--border);margin:12px 0}
+
+  /* Compare table */
+  .cmp{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  .cmp th{padding:10px 14px;text-align:center;border:1px solid var(--border)}
+  .cmp td{padding:10px 14px;border:1px solid var(--border);vertical-align:top}
+  .cmp .row-label{background:#1a1d26;font-size:13px;color:var(--muted)}
+  .cmp .col-copy{background:rgba(124,196,255,.04)}
+  .cmp .col-move{background:rgba(255,210,138,.04)}
+  .cmp th.col-copy{background:rgba(124,196,255,.12);color:var(--blue)}
+  .cmp th.col-move{background:rgba(255,210,138,.12);color:var(--amber)}
+
+  /* Grid */
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:700px){.g2{grid-template-columns:1fr}}
+
+  .chip{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;
+    font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    border:1px solid var(--border);color:var(--muted);margin-right:6px}
+  .chip.blue{color:var(--blue);border-color:rgba(124,196,255,.35)}
+  .chip.amber{color:var(--amber);border-color:rgba(255,210,138,.35)}
+  .chip.red{color:var(--red);border-color:rgba(255,138,138,.35)}
+  .chip.green{color:var(--green);border-color:rgba(125,220,156,.35)}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="#context">배경</a>
+  <a href="#helper">Set / Release</a>
+  <a href="#lvrv">lvalue vs rvalue</a>
+  <a href="#copy">복사 생성자</a>
+  <a href="#move">이동 생성자</a>
+  <a href="#dtor">소멸자와의 관계</a>
+  <a href="#compare">나란히 비교</a>
+  <a href="#pitfall">함정 모음</a>
+</nav>
+
+<div class="wrap">
+
+<!-- ══════════════════════════════════════════
+     0. 전체 맥락
+════════════════════════════════════════════ -->
+<section id="context">
+  <h2>0. 왜 이게 필요한지부터</h2>
+
+  <p>
+    <code>TSharedPtr</code>는 <b>참조 카운트(reference count)로 메모리를 관리하는 스마트 포인터</b>입니다.
+    원시 포인터(<code>T*</code>)와 달리, 몇 명이 이 객체를 "소유"하고 있는지를 세고
+    마지막 소유자가 떠날 때 자동으로 <code>delete</code>를 호출합니다.
+  </p>
+
+  <div class="box gray" style="margin:14px 0">
+    <div class="box-title">관리 규칙 한 줄 요약</div>
+    <ul>
+      <li>"누군가 이 포인터를 받으면" → <code>refCount ++</code></li>
+      <li>"누군가 이 포인터를 놓으면" → <code>refCount --</code></li>
+      <li><code>refCount == 0</code> 이 되는 순간 → <code>delete</code></li>
+    </ul>
+  </div>
+
+  <p>
+    그런데 C++에서 객체를 "받는" 방법은 여러 가지입니다. 복사 생성자는
+    <b>살아있는 객체로부터</b>, 이동 생성자는 <b>곧 사라질 임시 객체로부터</b> 받습니다.
+    두 경우는 refCount를 처리하는 방식이 완전히 다르기 때문에 함수를 따로 만들어야 합니다.
+  </p>
+
+  <h3>코드 전체 구조 훑기</h3>
+  <div class="filepath">ServerCore/RefCounting.h</div>
+  <pre><span class="cm">// ── 관리되는 객체의 베이스 클래스 ──</span>
+<span class="kw">class</span> <span class="ty">RefCountable</span> {
+    <span class="ty">atomic</span>&lt;<span class="ty">int32</span>&gt; _refCount = <span class="nu">1</span>;   <span class="cm">// 생성 시 자신이 첫 소유자</span>
+    <span class="ty">int32</span> <span class="ty">AddRef</span>()    { <span class="kw">return</span> ++_refCount; }
+    <span class="ty">int32</span> <span class="ty">ReleaseRef</span>() {
+        <span class="ty">int32</span> n = --_refCount;
+        <span class="kw">if</span> (n == <span class="nu">0</span>) <span class="kw">delete this</span>;   <span class="cm">// 마지막 소유자 → 자살</span>
+        <span class="kw">return</span> n;
+    }
+};
+
+<span class="cm">// ── 스마트 포인터 ──</span>
+<span class="kw">template</span>&lt;<span class="kw">typename</span> T&gt;
+<span class="kw">class</span> <span class="ty">TSharedPtr</span> {
+    T* _ptr = <span class="kw">nullptr</span>;
+
+    <span class="cm">// 내부 헬퍼</span>
+    <span class="kw">void</span> <span class="ty">Set</span>(T* ptr);     <span class="cm">// _ptr 저장 + AddRef</span>
+    <span class="kw">void</span> <span class="ty">Release</span>();      <span class="cm">// ReleaseRef + _ptr = nullptr</span>
+
+    <span class="cm">// Rule of 5</span>
+    <span class="ty">TSharedPtr</span>(<span class="kw">const</span> <span class="ty">TSharedPtr</span>&amp; rhs);   <span class="cm">// 복사 생성자</span>
+    <span class="ty">TSharedPtr</span>(<span class="ty">TSharedPtr</span>&amp;&amp; rhs);         <span class="cm">// 이동 생성자</span>
+    ~<span class="ty">TSharedPtr</span>();
+    <span class="ty">TSharedPtr</span>&amp; <span class="kw">operator</span>=(<span class="kw">const</span> <span class="ty">TSharedPtr</span>&amp;);
+    <span class="ty">TSharedPtr</span>&amp; <span class="kw">operator</span>=(<span class="ty">TSharedPtr</span>&amp;&amp;);
+};</pre>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     1. Set / Release 헬퍼
+════════════════════════════════════════════ -->
+<section id="helper">
+  <h2>1. Set / Release — 모든 것의 기반</h2>
+  <p>
+    복사·이동 생성자를 이해하기 전에 이 두 헬퍼를 먼저 봐야 합니다.
+    이 둘이 모든 refCount 조작을 담당합니다.
+  </p>
+
+  <div class="g2">
+    <div>
+      <h3>Set()</h3>
+      <pre><span class="kw">void</span> <span class="ty">Set</span>(T* ptr) {
+    _ptr = ptr;
+    <span class="kw">if</span> (ptr)
+        ptr-&gt;<span class="ty">AddRef</span>(); <span class="cm">// refCount ++</span>
+}</pre>
+      <ul>
+        <li>포인터를 <code>_ptr</code>에 저장</li>
+        <li><code>nullptr</code>가 아니면 <code>AddRef()</code> → "내가 소유자가 됨"을 등록</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Release()</h3>
+      <pre><span class="kw">void</span> <span class="ty">Release</span>() {
+    <span class="kw">if</span> (_ptr != <span class="kw">nullptr</span>) {
+        _ptr-&gt;<span class="ty">ReleaseRef</span>(); <span class="cm">// refCount --</span>
+        _ptr = <span class="kw">nullptr</span>;    <span class="cm">// 내 손 놓기</span>
+    }
+}</pre>
+      <ul>
+        <li><code>nullptr</code> 체크로 이중 해제 방어</li>
+        <li><code>ReleaseRef()</code> 안에서 ref가 0이 되면 자동 <code>delete</code></li>
+        <li>반드시 <code>_ptr = nullptr</code>로 마무리</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="box blue">
+    <div class="box-title" style="color:var(--blue)">핵심 원칙</div>
+    <b>소유하면 Set, 포기하면 Release.</b>
+    이 두 함수만 잘 이해하면 복사/이동/대입/소멸자 모두 같은 패턴이에요.
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     2. lvalue / rvalue
+════════════════════════════════════════════ -->
+<section id="lvrv">
+  <h2>2. lvalue vs rvalue — 시그니처가 갈리는 이유</h2>
+  <p>
+    복사 생성자와 이동 생성자가 따로 있는 근본 이유는 <b>인자의 종류</b>가 다르기 때문입니다.
+  </p>
+
+  <table class="tok" style="margin-top:14px">
+    <tr>
+      <th>종류</th>
+      <th>정의</th>
+      <th>예시</th>
+      <th>참조 타입</th>
+      <th>누가 받는가</th>
+    </tr>
+    <tr>
+      <td><span style="color:var(--blue)">lvalue</span></td>
+      <td>이름이 있는 값.<br>이 줄이 끝나도 살아있음</td>
+      <td><pre style="margin:0;border:none;padding:0;background:none;font-size:12.5px"><span class="ty">TSharedPtr</span>&lt;Player&gt; a(...);</pre></td>
+      <td><code>const T&amp;</code></td>
+      <td>복사 생성자</td>
+    </tr>
+    <tr>
+      <td><span style="color:var(--amber)">rvalue</span></td>
+      <td>이름이 없는 값.<br>이 줄 끝나면 사라짐</td>
+      <td><pre style="margin:0;border:none;padding:0;background:none;font-size:12.5px"><span class="ty">TSharedPtr</span>&lt;Player&gt;(<span class="kw">new</span> Player())
+std::move(a)</pre></td>
+      <td><code>T&amp;&amp;</code></td>
+      <td>이동 생성자</td>
+    </tr>
+  </table>
+
+  <div class="box gray" style="margin-top:12px">
+    <div class="box-title">왜 구분해야 하나?</div>
+    <ul>
+      <li>
+        <b>lvalue</b>는 복사 후에도 원본이 계속 쓰인다 → 내가 ref를 +1 해야 한다.
+      </li>
+      <li>
+        <b>rvalue</b>는 어차피 곧 소멸한다 → ref를 올렸다가 바로 내리는 낭비 없이,
+        포인터만 훔쳐오면 된다.
+      </li>
+    </ul>
+  </div>
+
+  <h3>컴파일러가 자동으로 선택한다</h3>
+  <pre><span class="ty">TSharedPtr</span>&lt;Player&gt; a(<span class="kw">new</span> Player()); <span class="cm">// a는 lvalue</span>
+
+<span class="ty">TSharedPtr</span>&lt;Player&gt; b = a;               <span class="cm">// → 복사 생성자  (a는 lvalue)</span>
+<span class="ty">TSharedPtr</span>&lt;Player&gt; c = std::move(a);    <span class="cm">// → 이동 생성자  (move(a)는 rvalue)</span>
+<span class="ty">TSharedPtr</span>&lt;Player&gt; d = GetPlayer();     <span class="cm">// → 이동 생성자  (반환값은 rvalue)</span></pre>
+  <p>
+    두 시그니처만 만들어 두면, 컴파일러가 인자 타입에 따라 <b>자동으로 알맞은 오버로드를 고릅니다.</b>
+  </p>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     3. 복사 생성자
+════════════════════════════════════════════ -->
+<section id="copy">
+  <h2>3. 복사 생성자 — 완전 해부</h2>
+
+  <h3>3-1. 시그니처를 토큰 단위로 뜯기</h3>
+  <div class="filepath">ServerCore/RefCounting.h : 40</div>
+
+  <div class="sigbar">
+    <div class="fn">
+      <span class="tok-box t-ty">TSharedPtr</span>
+      <span class="t-punc">(</span>
+      <span class="tok-box t-kw">const</span>
+      <span class="tok-box t-ty">TSharedPtr</span>
+      <span class="tok-box t-ref">&amp;</span>
+      <span class="tok-box t-nm">rhs</span>
+      <span class="t-punc">)</span>
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="dot" style="background:rgba(130,170,255,.6)"></span>타입</span>
+    <span><span class="dot" style="background:rgba(199,146,234,.6)"></span>키워드</span>
+    <span><span class="dot" style="background:rgba(255,210,138,.6)"></span>lvalue 참조 <code>&amp;</code></span>
+    <span><span class="dot" style="background:rgba(125,220,156,.6)"></span>매개변수 이름</span>
+  </div>
+
+  <table class="tok">
+    <tr><th>토큰</th><th>왜 이런 모양?</th></tr>
+    <tr>
+      <td><span class="hl-b">TSharedPtr</span></td>
+      <td>
+        생성자 이름 = 클래스 이름. 반환 타입 없음.<br>
+        이 함수는 새 <code>TSharedPtr</code> 객체를 만드는 역할.
+      </td>
+    </tr>
+    <tr>
+      <td><span style="color:var(--kw)">const</span></td>
+      <td>
+        <b>rhs를 읽기만 하고 절대 수정하지 않겠다</b>는 약속.<br>
+        복사할 때는 원본(<code>rhs</code>)에 손댈 이유가 없으니까 반드시 붙임.<br>
+        <span style="color:var(--muted);font-size:13px">
+          덕분에 <code>const TSharedPtr&lt;Player&gt;&amp;</code>도 인자로 받을 수 있다.
+        </span>
+      </td>
+    </tr>
+    <tr>
+      <td><span style="color:var(--amber)">TSharedPtr&amp;</span></td>
+      <td>
+        <b>lvalue 참조</b>. <code>&amp;</code>가 하나인 것이 핵심.<br>
+        이름 있는 값(lvalue)만 이 참조에 바인딩 된다.<br>
+        <code>&amp;</code>가 없으면 인자가 복사돼서 무한 재귀가 발생함.
+        <div class="box red" style="margin-top:8px;padding:10px 12px">
+          <code>TSharedPtr(TSharedPtr rhs)</code> — <span style="color:var(--red)">❌ 위험</span><br>
+          <span style="font-size:13px">이 형태는 함수 호출 시 rhs를 복사하려는데, 그 복사가 또 이 함수를 부름 → 무한 재귀</span>
+        </div>
+      </td>
+    </tr>
+    <tr>
+      <td><span style="color:var(--green)">rhs</span></td>
+      <td>
+        "right-hand side"의 약자. 대입 기준으로 오른쪽 피연산자.
+        <code>TSharedPtr b = a</code>에서 <code>a</code>가 <code>rhs</code>에 바인딩.
+      </td>
+    </tr>
+  </table>
+
+  <hr>
+
+  <h3>3-2. 본문 동작 — 한 줄이지만</h3>
+  <pre><span class="ty">TSharedPtr</span>(<span class="kw">const</span> <span class="ty">TSharedPtr</span>&amp; rhs) {
+    <span class="ty">Set</span>(rhs._ptr);   <span class="cm">// ← 이게 전부</span>
+}</pre>
+
+  <p><code>Set(rhs._ptr)</code> 안에서 실제로 일어나는 일:</p>
+  <ol class="steps">
+    <li>
+      <div>
+        <b>_ptr = rhs._ptr</b><br>
+        나(<code>this</code>)의 포인터를 <code>rhs</code>와 <b>같은 주소</b>로 설정한다.
+        이제 둘이 같은 <code>Player</code> 객체를 가리킨다.
+      </div>
+    </li>
+    <li>
+      <div>
+        <b>rhs._ptr→AddRef()</b><br>
+        그 <code>Player</code> 객체의 <code>refCount</code>를 +1 한다.
+        "나도 이 객체의 소유자"라고 등록하는 것.
+      </div>
+    </li>
+  </ol>
+
+  <h3>3-3. 메모리 다이어그램</h3>
+  <div class="mem">
+    <div class="mem-label">① 복사 전</div>
+    <div class="mem-row">
+      <div class="mem-var">a<br><span style="font-size:11px;color:var(--muted)">TSharedPtr</span></div>
+      <div class="mem-arr">──→</div>
+      <div class="mem-obj">
+        <span style="color:var(--green)">Player</span> 객체<br>
+        <span style="font-size:11.5px;color:var(--muted)">_refCount = <span style="color:var(--amber)">1</span></span>
+      </div>
+    </div>
+    <hr class="mem-sep">
+    <div class="mem-label">② <code>TSharedPtr b = a;</code> 복사 생성자 호출 후</div>
+    <div class="mem-row">
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="mem-var">a</div>
+        <div class="mem-var" style="border-color:rgba(124,196,255,.4)">b<br><span style="font-size:11px;color:var(--blue)">(새 객체)</span></div>
+      </div>
+      <div class="mem-arr" style="align-self:center">──→<br>──→</div>
+      <div class="mem-obj" style="align-self:center">
+        <span style="color:var(--green)">Player</span> 객체<br>
+        <span style="font-size:11.5px;color:var(--muted)">_refCount = <span style="color:var(--amber)">2</span> <span style="color:var(--green)">← +1 됨</span></span>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:10px">
+      a와 b 모두 살아있는 한 Player 객체는 절대 삭제되지 않는다.
+    </div>
+  </div>
+
+  <h3>3-4. 왜 필요한가</h3>
+  <div class="box blue">
+    <div class="box-title" style="color:var(--blue)">없으면 어떻게 되나?</div>
+    <p>
+      복사 생성자를 안 만들면 컴파일러가 <b>얕은 복사(shallow copy)</b>를 기본으로 제공합니다.
+      얕은 복사는 <code>_ptr</code> 값만 그대로 복사하고 <code>AddRef()</code>를 호출하지 않아요.
+    </p>
+    <pre style="margin:8px 0"><span class="cm">// 컴파일러 기본 복사 (AddRef 없음)</span>
+b._ptr = a._ptr;  <span class="cm">// ← refCount는 여전히 1</span>
+
+<span class="cm">// 나중에 b가 먼저 소멸하면</span>
+b.~TSharedPtr() → Release() → refCount 1→0 → <span style="color:var(--red)">delete Player!</span>
+<span class="cm">// a는 아직 살아있는데 Player는 이미 사라짐 → 💀 use-after-free</span></pre>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     4. 이동 생성자
+════════════════════════════════════════════ -->
+<section id="move">
+  <h2>4. 이동 생성자 — 완전 해부</h2>
+
+  <h3>4-1. 시그니처를 토큰 단위로 뜯기</h3>
+  <div class="filepath">ServerCore/RefCounting.h : 42</div>
+
+  <div class="sigbar">
+    <div class="fn">
+      <span class="tok-box t-ty">TSharedPtr</span>
+      <span class="t-punc">(</span>
+      <span class="tok-box t-ty">TSharedPtr</span>
+      <span class="tok-box t-rref">&amp;&amp;</span>
+      <span class="tok-box t-nm">rhs</span>
+      <span class="t-punc">)</span>
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="dot" style="background:rgba(130,170,255,.6)"></span>타입</span>
+    <span><span class="dot" style="background:rgba(255,138,138,.6)"></span>rvalue 참조 <code>&amp;&amp;</code></span>
+    <span><span class="dot" style="background:rgba(125,220,156,.6)"></span>매개변수 이름</span>
+  </div>
+
+  <table class="tok">
+    <tr><th>토큰</th><th>왜 이런 모양?</th></tr>
+    <tr>
+      <td><span style="color:var(--ty)">TSharedPtr</span></td>
+      <td>생성자 이름 = 클래스 이름. 복사 생성자와 동일.</td>
+    </tr>
+    <tr>
+      <td><span style="color:var(--red)">TSharedPtr&amp;&amp;</span></td>
+      <td>
+        <b>rvalue 참조</b>. <code>&amp;</code>가 <b>두 개</b>인 것이 핵심.<br>
+        이름 없는 임시값(rvalue)만 이 참조에 바인딩 된다.<br>
+        lvalue를 여기에 넘기려면 <code>std::move()</code>로 강제 변환해야 함.<br>
+        <div class="box amber" style="margin-top:8px;padding:10px 12px;font-size:13px">
+          <code>std::move(a)</code>는 a를 실제로 이동시키는 게 아닙니다.<br>
+          <b>"이 값은 lvalue지만 rvalue처럼 취급해도 돼"</b>라고 컴파일러에게 알려주는 캐스트일 뿐.
+          실제 이동은 이동 생성자/대입 연산자가 한다.
+        </div>
+      </td>
+    </tr>
+    <tr>
+      <td><span style="color:var(--kw)">const 없음!</span></td>
+      <td>
+        복사 생성자와 달리 <code>const</code>가 없습니다.<br>
+        이동 생성자는 <b>반드시 rhs를 수정해야</b> 하기 때문입니다.
+        (<code>rhs._ptr = nullptr</code>)<br>
+        <code>const</code>가 붙으면 <code>rhs._ptr</code>을 바꿀 수 없어서 컴파일 에러.
+      </td>
+    </tr>
+    <tr>
+      <td><span style="color:var(--green)">rhs</span></td>
+      <td>
+        복사 생성자와 동일한 이름. 여기서는 "곧 죽을 rvalue 객체"를 가리킴.
+      </td>
+    </tr>
+  </table>
+
+  <hr>
+
+  <h3>4-2. 본문 동작 — 두 줄의 의미</h3>
+  <pre><span class="ty">TSharedPtr</span>(<span class="ty">TSharedPtr</span>&amp;&amp; rhs) {
+    _ptr = rhs._ptr;      <span class="cm">// ① 포인터를 훔쳐온다</span>
+    rhs._ptr = <span class="kw">nullptr</span>;   <span class="cm">// ② 원본을 비워서 무력화한다</span>
+}</pre>
+
+  <ol class="steps">
+    <li>
+      <div>
+        <b>_ptr = rhs._ptr</b> — 포인터를 훔쳐온다<br>
+        rhs가 갖고 있던 포인터 주소를 내 것(<code>this->_ptr</code>)으로 가져온다.
+        이 시점에서 <code>AddRef()</code>가 없다. rhs의 소유권을 그대로 이전받는 것이므로
+        refCount를 건드릴 필요가 없다.
+      </div>
+    </li>
+    <li>
+      <div>
+        <b>rhs._ptr = nullptr</b> — 원본을 무력화한다<br>
+        rhs는 곧 소멸한다. 소멸자는 <code>Release()</code>를 부르는데,
+        <code>nullptr</code>이면 <code>Release()</code>가 아무것도 하지 않는다.
+        이걸 안 하면 rhs의 소멸자가 내가 지금 들고 있는 객체를 <code>delete</code>해 버린다.
+        <div class="box red" style="margin-top:8px;padding:10px 12px;font-size:13px">
+          <code>nullptr</code> 처리 없이 rhs가 소멸하면:<br>
+          <code>~TSharedPtr()</code> → <code>Release()</code> → <code>refCount--</code> → 0 →
+          <span style="color:var(--red)">delete!</span><br>
+          나(<code>this</code>)는 이미 그 주소를 들고 있는데 → <b>use-after-free</b>
+        </div>
+      </div>
+    </li>
+  </ol>
+
+  <h3>4-3. 메모리 다이어그램</h3>
+  <div class="mem">
+    <div class="mem-label">① 이동 전</div>
+    <div class="mem-row">
+      <div class="mem-var">a<br><span style="font-size:11px;color:var(--muted)">TSharedPtr</span></div>
+      <div class="mem-arr">──→</div>
+      <div class="mem-obj">
+        <span style="color:var(--green)">Player</span> 객체<br>
+        <span style="font-size:11.5px;color:var(--muted)">_refCount = <span style="color:var(--amber)">1</span></span>
+      </div>
+    </div>
+    <hr class="mem-sep">
+    <div class="mem-label">② <code>TSharedPtr b = std::move(a);</code> 이동 생성자 호출 후</div>
+    <div class="mem-row" style="margin-bottom:6px">
+      <div class="mem-var" style="border-color:rgba(255,138,138,.35);color:rgba(255,255,255,.4)">
+        a<br><span style="font-size:10px;color:var(--red)">nullptr</span>
+      </div>
+      <div class="mem-arr" style="opacity:.25">──→</div>
+      <div class="mem-obj" style="opacity:.25;border-style:dashed;font-size:12px">— (없음)</div>
+    </div>
+    <div class="mem-row">
+      <div class="mem-var" style="border-color:rgba(255,210,138,.4)">
+        b<br><span style="font-size:11px;color:var(--amber)">(새 객체)</span>
+      </div>
+      <div class="mem-arr" style="color:var(--amber)">──→</div>
+      <div class="mem-obj">
+        <span style="color:var(--green)">Player</span> 객체<br>
+        <span style="font-size:11.5px;color:var(--muted)">_refCount = <span style="color:var(--amber)">1</span> <span style="color:var(--green)">← 그대로!</span></span>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:10px">
+      a는 nullptr이 되어 더 이상 쓸 수 없다. b가 Player의 유일한 소유자가 됐다.
+      refCount는 1 그대로 — AddRef/ReleaseRef가 한 번도 호출되지 않았다.
+    </div>
+  </div>
+
+  <h3>4-4. 왜 필요한가</h3>
+  <div class="box amber">
+    <div class="box-title" style="color:var(--amber)">이동 생성자 없으면 생기는 문제</div>
+    <p>이동 생성자가 없으면 컴파일러는 rvalue 인자도 복사 생성자로 처리합니다.</p>
+    <pre style="margin:10px 0"><span class="cm">// 이 코드를 실행했을 때</span>
+pool.<span class="ty">Add</span>(<span class="ty">TSharedPtr</span>&lt;Player&gt;(<span class="kw">new</span> Player()));
+<span class="cm">//       ^^^^^^^^^^^^^^^^^^^^^^^^^ rvalue (임시값)</span></pre>
+    <div class="g2" style="margin-top:8px">
+      <div class="box red" style="margin:0">
+        <div class="box-title" style="color:var(--red)">이동 생성자 없을 때 (복사로 처리)</div>
+        <ol style="font-size:13px;margin-left:18px;line-height:2">
+          <li>임시 <code>TSharedPtr</code> 생성 → ref = 1</li>
+          <li>복사 생성자 호출 → <code>AddRef()</code> → ref = 2</li>
+          <li>임시값 소멸 → <code>Release()</code> → ref = 1</li>
+        </ol>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:4px">
+          atomic 연산이 2번 발생. 멀티스레드에서 atomic은 비싸다.
+        </div>
+      </div>
+      <div class="box green" style="margin:0">
+        <div class="box-title" style="color:var(--green)">이동 생성자 있을 때</div>
+        <ol style="font-size:13px;margin-left:18px;line-height:2">
+          <li>임시 <code>TSharedPtr</code> 생성 → ref = 1</li>
+          <li>이동 생성자 호출 → 포인터만 이전</li>
+          <li>임시값 소멸 → <code>_ptr==nullptr</code> → 아무것도 안 함</li>
+        </ol>
+        <div style="font-size:12.5px;color:var(--muted);margin-top:4px">
+          atomic 연산 0번. 성능 이득.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     5. 소멸자와의 관계
+════════════════════════════════════════════ -->
+<section id="dtor">
+  <h2>5. 소멸자와의 관계 — 전체 생명주기</h2>
+
+  <pre>~<span class="ty">TSharedPtr</span>() { <span class="ty">Release</span>(); }</pre>
+
+  <p>
+    소멸자는 단순히 <code>Release()</code>를 호출합니다.
+    이 단순함이 유지되는 이유는 <b>이동 생성자에서 <code>rhs._ptr = nullptr</code>을 보장</b>하기 때문입니다.
+    rhs가 소멸될 때 <code>_ptr</code>이 <code>nullptr</code>이라 <code>Release()</code>가 아무것도 하지 않는 거예요.
+  </p>
+
+  <h3>전체 생명주기 예시</h3>
+  <pre><span class="kw">void</span> <span class="ty">Example</span>() {
+    <span class="ty">TSharedPtr</span>&lt;Player&gt; a(<span class="kw">new</span> Player());   <span class="cm">// Set(ptr) → ref=1</span>
+    {
+        <span class="ty">TSharedPtr</span>&lt;Player&gt; b = a;           <span class="cm">// 복사 → ref=2</span>
+        <span class="ty">TSharedPtr</span>&lt;Player&gt; c = std::move(a); <span class="cm">// 이동 → ref=2, a=null</span>
+
+        <span class="cm">// b 소멸: Release() → ref=1</span>
+        <span class="cm">// c 소멸: Release() → ref=0 → delete Player!</span>
+    }
+    <span class="cm">// a.Release(): _ptr==nullptr이므로 아무것도 안 함</span>
+}</pre>
+  <div class="box gray">
+    <div class="box-title">관찰 포인트</div>
+    <ul>
+      <li>복사(<code>b = a</code>)는 ref를 2로 올렸으므로, b 하나가 사라져도 Player는 살아있다.</li>
+      <li>이동(<code>c = std::move(a)</code>)은 ref를 건드리지 않았으므로 여전히 ref = 2.</li>
+      <li>b가 소멸 → ref 1. c가 소멸 → ref 0 → <code>delete Player</code>.</li>
+      <li>a는 이동 후 <code>nullptr</code>이 되어 소멸해도 아무 일도 안 일어난다.</li>
+    </ul>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     6. 나란히 비교
+════════════════════════════════════════════ -->
+<section id="compare">
+  <h2>6. 복사 vs 이동 나란히 비교</h2>
+
+  <table class="cmp">
+    <tr>
+      <th class="row-label"></th>
+      <th class="col-copy">복사 생성자</th>
+      <th class="col-move">이동 생성자</th>
+    </tr>
+    <tr>
+      <td class="row-label">시그니처</td>
+      <td class="col-copy"><code>TSharedPtr(const TSharedPtr<b>&amp;</b> rhs)</code></td>
+      <td class="col-move"><code>TSharedPtr(TSharedPtr<b>&amp;&amp;</b> rhs)</code></td>
+    </tr>
+    <tr>
+      <td class="row-label">const?</td>
+      <td class="col-copy"><span style="color:var(--green)">있음</span> — rhs 변경 안 함</td>
+      <td class="col-move"><span style="color:var(--red)">없음</span> — rhs 변경해야 함</td>
+    </tr>
+    <tr>
+      <td class="row-label">받는 인자</td>
+      <td class="col-copy">lvalue (이름 있는 값)</td>
+      <td class="col-move">rvalue (이름 없는 임시값)</td>
+    </tr>
+    <tr>
+      <td class="row-label">AddRef 호출</td>
+      <td class="col-copy"><span style="color:var(--green)">있음</span> — ref ++</td>
+      <td class="col-move"><span style="color:var(--muted)">없음</span></td>
+    </tr>
+    <tr>
+      <td class="row-label">rhs 상태 변화</td>
+      <td class="col-copy"><span style="color:var(--green)">그대로</span> — 원본 유지</td>
+      <td class="col-move"><span style="color:var(--red)">nullptr</span> — 무력화</td>
+    </tr>
+    <tr>
+      <td class="row-label">의미</td>
+      <td class="col-copy">소유권을 <b>공유</b></td>
+      <td class="col-move">소유권을 <b>이전</b></td>
+    </tr>
+    <tr>
+      <td class="row-label">atomic 비용</td>
+      <td class="col-copy">1회 (AddRef)</td>
+      <td class="col-move">0회</td>
+    </tr>
+    <tr>
+      <td class="row-label">호출 예</td>
+      <td class="col-copy"><pre style="margin:0;border:none;padding:0;background:none;font-size:12.5px"><span class="ty">TSharedPtr</span> b = a;
+func(a);</pre></td>
+      <td class="col-move"><pre style="margin:0;border:none;padding:0;background:none;font-size:12.5px"><span class="ty">TSharedPtr</span> b = std::move(a);
+func(std::move(a));
+<span class="ty">TSharedPtr</span> b = <span class="ty">GetPlayer</span>();</pre></td>
+    </tr>
+  </table>
+</section>
+
+
+<!-- ══════════════════════════════════════════
+     7. 함정 모음
+════════════════════════════════════════════ -->
+<section id="pitfall">
+  <h2>7. 자주 빠지는 함정들</h2>
+
+  <h3>① 이동 후 원본 사용</h3>
+  <pre><span class="ty">TSharedPtr</span>&lt;Player&gt; a(<span class="kw">new</span> Player());
+<span class="ty">TSharedPtr</span>&lt;Player&gt; b = std::move(a);
+a-&gt;DoSomething();  <span class="cm">// ❌ a._ptr은 nullptr! 역참조 크래시</span></pre>
+  <div class="box red" style="padding:10px 14px;margin-bottom:16px">
+    <code>std::move(a)</code>로 이동한 뒤 <code>a</code>는 <code>nullptr</code> 상태입니다.
+    이동 후에는 원본을 사용하면 안 됩니다. 컴파일러는 이 오류를 잡아주지 않아요.
+  </div>
+
+  <h3>② <code>nullptr</code> 처리를 빠뜨리면</h3>
+  <pre><span class="cm">// 이렇게 짜면 안 됩니다</span>
+<span class="ty">TSharedPtr</span>(<span class="ty">TSharedPtr</span>&amp;&amp; rhs) {
+    _ptr = rhs._ptr;
+    <span class="cm">// rhs._ptr = nullptr; ← 이걸 빠뜨리면</span>
+}
+<span class="cm">// rhs 소멸 시 Release() → refCount 0 → delete → b는 dangling pointer!</span></pre>
+
+  <h3>③ <code>&amp;</code> 하나와 <code>&amp;&amp;</code> 둘의 혼동</h3>
+  <pre><span class="kw">void</span> <span class="ty">Foo</span>(<span class="ty">TSharedPtr</span>&amp; sp)  { ... }  <span class="cm">// lvalue 참조만 받음</span>
+<span class="kw">void</span> <span class="ty">Bar</span>(<span class="ty">TSharedPtr</span>&amp;&amp; sp) { ... }  <span class="cm">// rvalue 참조만 받음</span>
+
+<span class="ty">TSharedPtr</span> a(<span class="kw">new</span> Player());
+<span class="ty">Foo</span>(a);              <span class="cm">// OK</span>
+<span class="ty">Bar</span>(std::move(a));   <span class="cm">// OK</span>
+<span class="ty">Foo</span>(std::move(a));   <span class="cm">// ❌ 컴파일 에러 — rvalue를 lvalue ref로 못 받음</span>
+<span class="ty">Bar</span>(a);              <span class="cm">// ❌ 컴파일 에러 — lvalue를 rvalue ref로 못 받음</span></pre>
+
+  <h3>④ 변환 생성자의 타입 오타</h3>
+  <pre><span class="cm">// 현재 코드 (오타 의심)</span>
+<span class="kw">template</span>&lt;<span class="kw">typename</span> U&gt;
+<span class="ty">TSharedPtr</span>(<span class="kw">const</span> <span class="ty">TSharedPtr</span>&lt;U&gt;&amp; rhs) {
+    <span class="ty">Set</span>(<span class="kw">static_cast</span>&lt;T&gt;(rhs._ptr));   <span class="cm">// ← T 여야 하나 T* 여야 하나?</span>
+}
+
+<span class="cm">// 올바른 형태</span>
+<span class="ty">Set</span>(<span class="kw">static_cast</span>&lt;T*&gt;(rhs._ptr));     <span class="cm">// ← 포인터 캐스팅이어야 함</span></pre>
+  <div class="box amber" style="padding:10px 14px">
+    <code>static_cast&lt;T&gt;</code>는 객체 타입으로 변환을 시도하는데, 포인터를 객체로 변환할 수 없어
+    대부분의 경우 컴파일 에러가 납니다. <code>static_cast&lt;T*&gt;</code>가 의도된 형태입니다.
+  </div>
+
+  <hr style="margin-top:36px">
+  <div class="box gray" style="margin-top:20px">
+    <div class="box-title">세 줄 요약</div>
+    <ul>
+      <li><b>복사 생성자</b>: <code>const T&amp;</code> — 살아있는 값, 소유권 공유, <code>AddRef</code></li>
+      <li><b>이동 생성자</b>: <code>T&amp;&amp;</code> + const 없음 — 임시값, 소유권 이전, <code>rhs=nullptr</code></li>
+      <li>둘의 차이를 만드는 핵심은 <code>&amp;</code> 하나냐 <code>&amp;&amp;</code> 둘이냐 — 이게 인자 종류(lvalue/rvalue)를 가른다</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

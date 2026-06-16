@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>멀티스레드 IOCP 서버 구축 프로젝트</title>
+  <style>
+    :root {
+      --bg: #f4efe7;
+      --panel: #fffaf3;
+      --panel-strong: #fff;
+      --text: #1f2937;
+      --muted: #5f6b7a;
+      --line: #e7dccd;
+      --accent: #0f766e;
+      --accent-soft: #dff5f1;
+      --accent-strong: #115e59;
+      --warn: #a16207;
+      --warn-soft: #fef3c7;
+      --shadow: 0 18px 40px rgba(31, 41, 55, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top right, rgba(15, 118, 110, 0.12), transparent 24%),
+        radial-gradient(circle at top left, rgba(161, 98, 7, 0.10), transparent 28%),
+        linear-gradient(180deg, #f8f4ee 0%, #f4efe7 100%);
+      line-height: 1.65;
+    }
+
+    .wrap {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 40px 0 64px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(255, 250, 243, 0.92));
+      border: 1px solid rgba(231, 220, 205, 0.95);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      padding: 34px 32px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -40px -40px auto;
+      width: 220px;
+      height: 220px;
+      background: radial-gradient(circle, rgba(15, 118, 110, 0.14), transparent 68%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent-strong);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    h1 {
+      margin: 14px 0 12px;
+      font-size: clamp(32px, 5vw, 52px);
+      line-height: 1.08;
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      max-width: 760px;
+      margin: 0;
+      font-size: 17px;
+      color: var(--muted);
+    }
+
+    .hero-grid {
+      margin-top: 24px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+    }
+
+    .stat {
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid var(--line);
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 24px;
+      margin-bottom: 6px;
+    }
+
+    .section {
+      margin-top: 26px;
+      background: rgba(255, 255, 255, 0.86);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      padding: 28px;
+    }
+
+    .section h2 {
+      margin: 0 0 16px;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      padding: 20px;
+      border-radius: 20px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+    }
+
+    .card h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    .card p {
+      margin: 0 0 12px;
+      color: var(--muted);
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 5px 10px;
+      margin: 0 6px 6px 0;
+      border-radius: 999px;
+      background: #f7f1e8;
+      color: #6b4f2a;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 14px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 14px;
+      align-items: start;
+      padding: 18px;
+      border-radius: 18px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+    }
+
+    .step-no {
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, var(--accent) 0%, #14b8a6 100%);
+      color: #fff;
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .step h3 {
+      margin: 2px 0 8px;
+      font-size: 19px;
+    }
+
+    .step p,
+    .step ul,
+    .note,
+    .section p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    ul {
+      padding-left: 18px;
+      margin-top: 10px;
+    }
+
+    li + li {
+      margin-top: 6px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 16px;
+    }
+
+    .highlight {
+      padding: 20px;
+      border-radius: 20px;
+      background: linear-gradient(180deg, #f0fdf9 0%, #ecfeff 100%);
+      border: 1px solid #cdebe6;
+    }
+
+    .warning {
+      padding: 20px;
+      border-radius: 20px;
+      background: var(--warn-soft);
+      border: 1px solid #f4d38b;
+    }
+
+    .highlight h3,
+    .warning h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+      background: #f7f1e8;
+      padding: 2px 6px;
+      border-radius: 6px;
+      color: #7c3d12;
+    }
+
+    footer {
+      margin-top: 22px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 800px) {
+      .split {
+        grid-template-columns: 1fr;
+      }
+
+      .section,
+      .hero {
+        padding: 22px;
+      }
+
+      .step {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <span class="eyebrow">Project Overview</span>
+      <h1>멀티스레드 IOCP 서버 구축 프로젝트</h1>
+      <p>
+        이 프로젝트는 Windows 환경에서 동작하는 멀티스레드 IOCP 서버를 단계적으로 구축하기 위한 C++ 학습용 솔루션입니다.
+        현재는 네트워크 기능을 붙이기 전, 서버 코어의 초기 골격과 스레드 실행 기반을 먼저 정리하는 단계입니다.
+      </p>
+      <div class="hero-grid">
+        <div class="stat">
+          <strong>3개</strong>
+          <span>솔루션 내 프로젝트</span>
+        </div>
+        <div class="stat">
+          <strong>초기 단계</strong>
+          <span>IOCP 이전 부트스트랩 상태</span>
+        </div>
+        <div class="stat">
+          <strong>핵심 목표</strong>
+          <span>스레드 기반 서버 코어 마련</span>
+        </div>
+        <div class="stat">
+          <strong>현재 중심</strong>
+          <span>TLS, ThreadManager, 전역 초기화</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>한눈에 보는 현재 상태</h2>
+      <div class="split">
+        <div class="highlight">
+          <h3>지금 하고 있는 일</h3>
+          <p>
+            아직 IOCP 소켓 서버를 직접 구현하는 단계는 아니고, 그 서버를 안정적으로 올릴 수 있도록
+            공용 코어와 멀티스레드 실행 구조를 먼저 만드는 과정입니다.
+          </p>
+        </div>
+        <div class="warning">
+          <h3>아직 없는 것</h3>
+          <p>
+            <code>Accept</code>, <code>WSARecv</code>, <code>WSASend</code>, IOCP 완료 통지 처리,
+            세션 관리, 패킷 처리 같은 실제 네트워크 로직은 아직 들어가기 전 단계입니다.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>솔루션 구성</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>ServerCore</h3>
+          <p>서버와 클라이언트 양쪽에서 공통으로 쓸 기반 코드를 담는 정적 라이브러리입니다.</p>
+          <span class="tag">ThreadManager</span>
+          <span class="tag">TLS</span>
+          <span class="tag">공용 타입</span>
+          <span class="tag">공용 매크로</span>
+        </article>
+        <article class="card">
+          <h3>GameServer</h3>
+          <p>현재는 실제 게임 서버라기보다, 공용 코어와 멀티스레드 동작을 테스트하는 실행 프로젝트입니다.</p>
+          <span class="tag">실행 프로젝트</span>
+          <span class="tag">스레드 테스트</span>
+          <span class="tag">부트스트랩</span>
+        </article>
+        <article class="card">
+          <h3>DummyClient</h3>
+          <p>추후 테스트 클라이언트로 확장할 수 있도록 분리된 프로젝트지만, 아직은 초기 상태에 가깝습니다.</p>
+          <span class="tag">클라이언트 예정</span>
+          <span class="tag">미완성</span>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>지금까지 구현된 핵심 내용</h2>
+      <div class="timeline">
+        <article class="step">
+          <div class="step-no">1</div>
+          <div>
+            <h3>공용 코어 라이브러리 분리</h3>
+            <p>
+              <code>ServerCore</code>를 별도 프로젝트로 분리해 공통 기능을 모아두었습니다.
+              이후 네트워크, 세션, 패킷, 메모리 관리 같은 기능을 여기에 확장해 넣기 좋은 구조입니다.
+            </p>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-no">2</div>
+          <div>
+            <h3>공용 타입과 동기화 별칭 정리</h3>
+            <p>
+              <code>Types.h</code>에서 정수형 별칭과 <code>Atomic</code>, <code>Mutex</code>,
+              <code>LockGuard</code> 같은 동기화 타입 별칭을 정의했습니다.
+            </p>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-no">3</div>
+          <div>
+            <h3>TLS 기반 스레드 ID 관리</h3>
+            <p>
+              <code>thread_local uint32 LThreadId</code>를 사용해 각 스레드가 자기 고유 ID를 가지도록 구성했습니다.
+              이후 로그 추적, 스레드별 상태 관리, 스레드 로컬 자원 확장에 유리한 기반입니다.
+            </p>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-no">4</div>
+          <div>
+            <h3>ThreadManager 구현</h3>
+            <p>
+              <code>Launch()</code>로 작업 스레드를 생성하고, <code>Join()</code>으로 대기하며,
+              스레드 시작 시 <code>InitTLS()</code>를 호출해 고유 ID를 할당하는 흐름을 만들었습니다.
+            </p>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-no">5</div>
+          <div>
+            <h3>전역 코어 초기화 구조 마련</h3>
+            <p>
+              <code>CoreGlobal</code>이 전역 <code>GThreadManager</code>를 생성하고 해제합니다.
+              프로그램 시작 시 공용 매니저를 준비하는 패턴을 먼저 잡아둔 상태입니다.
+            </p>
+          </div>
+        </article>
+
+        <article class="step">
+          <div class="step-no">6</div>
+          <div>
+            <h3>서버 실행 프로젝트에서 멀티스레드 테스트</h3>
+            <p>
+              <code>GameServer</code>에서는 스레드 5개를 띄우고, 각 스레드가 자신의
+              <code>LThreadId</code>를 출력하도록 하여 초기 스레드 기반이 의도대로 동작하는지 확인하고 있습니다.
+            </p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>현재 실행 흐름</h2>
+      <div class="card">
+        <p class="note">
+          지금 서버 실행 코드는 아래와 같은 순서로 동작합니다.
+        </p>
+        <ul>
+          <li><code>CoreGlobal Core;</code> 생성으로 전역 스레드 매니저 준비</li>
+          <li><code>main()</code> 에서 작업 스레드 5개 생성</li>
+          <li>각 작업 스레드는 시작하면서 <code>InitTLS()</code> 호출</li>
+          <li>각 스레드는 자신의 <code>LThreadId</code>를 출력</li>
+          <li>1초 간격 무한 루프로 실행 상태 유지</li>
+          <li>메인 스레드는 <code>Join()</code>으로 스레드 종료를 대기</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>파일별 역할</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>솔루션 / 문서</h3>
+          <ul>
+            <li><code>Server.sln</code>: 전체 Visual Studio 솔루션</li>
+            <li><code>README.md</code>: 현재 진행 상태를 글로 정리한 문서</li>
+            <li><code>project-overview.html</code>: 현재 내용을 시각적으로 정리한 HTML 문서</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>ServerCore 핵심 파일</h3>
+          <ul>
+            <li><code>Types.h</code>: 공용 기본 타입과 동기화 타입 별칭 정의</li>
+            <li><code>CoreMacro.h</code>: 검증과 크래시 유도용 공용 매크로 정의</li>
+            <li><code>CoreTLS.h / CoreTLS.cpp</code>: 스레드 로컬 ID인 <code>LThreadId</code> 선언 및 정의</li>
+            <li><code>CoreGlobal.h / CoreGlobal.cpp</code>: 전역 <code>GThreadManager</code> 생성 및 해제</li>
+            <li><code>ThreadManager.h / ThreadManager.cpp</code>: 스레드 생성, 조인, TLS 초기화 담당</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>ServerCore 보조 파일</h3>
+          <ul>
+            <li><code>CorePch.h</code>: 공용 헤더를 묶어두는 코어 통합 include</li>
+            <li><code>pch.h / pch.cpp</code>: <code>ServerCore</code>용 precompiled header</li>
+            <li><code>CorePch.cpp / CoreMacro.cpp</code>: 현재는 구조 유지를 위한 구현 파일</li>
+            <li><code>ServerCore.vcxproj</code>: 정적 라이브러리 빌드 설정</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>GameServer 파일</h3>
+          <ul>
+            <li><code>GameServer.cpp</code>: 현재 메인 실행 파일, 멀티스레드 테스트 담당</li>
+            <li><code>pch.h / pch.cpp</code>: <code>GameServer</code>용 precompiled header와 라이브러리 링크 설정</li>
+            <li><code>GameServer.vcxproj</code>: 실행 파일 빌드 및 <code>ServerCore</code> 참조 설정</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>DummyClient 파일</h3>
+          <ul>
+            <li><code>DummyClient.cpp</code>: 현재는 <code>HelloWorld()</code>만 호출하는 초기 진입점</li>
+            <li><code>pch.h / pch.cpp</code>: <code>DummyClient</code>용 precompiled header와 링크 설정</li>
+            <li><code>DummyClient.vcxproj</code>: 추후 테스트 클라이언트로 확장될 실행 프로젝트 설정</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h3>지금 특히 중요한 파일</h3>
+          <ul>
+            <li><code>Types.h</code>: 프로젝트 전반의 공용 타입 기준</li>
+            <li><code>CoreTLS.cpp</code>: 스레드별 ID 저장</li>
+            <li><code>CoreGlobal.cpp</code>: 전역 매니저 초기화 진입점</li>
+            <li><code>ThreadManager.cpp</code>: 멀티스레드 실행 기반의 핵심 구현</li>
+            <li><code>GameServer.cpp</code>: 현재 코어를 실제로 시험하는 실행 코드</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>이 단계가 중요한 이유</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>바로 네트워크부터 붙이지 않음</h3>
+          <p>
+            IOCP 서버는 네트워크 코드뿐 아니라 스레드 구조, 자원 관리, 초기화 순서가 중요합니다.
+            그래서 먼저 기반을 안정적으로 만드는 접근을 택한 상태입니다.
+          </p>
+        </article>
+        <article class="card">
+          <h3>확장 포인트를 먼저 확보</h3>
+          <p>
+            지금 만들어둔 구조는 이후 메모리 매니저, 네트워크 코어, 세션 매니저,
+            작업 큐 같은 요소를 자연스럽게 붙이기 좋은 출발점입니다.
+          </p>
+        </article>
+        <article class="card">
+          <h3>디버깅과 운영에 유리</h3>
+          <p>
+            스레드별 식별 체계와 공용 초기화 흐름을 초기에 잡아두면,
+            나중에 IOCP 워커 스레드를 붙였을 때 로그 분석과 문제 추적이 훨씬 쉬워집니다.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>현재 미완성 또는 확인 포인트</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>DummyClient</h3>
+          <p>아직 실질적인 클라이언트 기능이 없습니다.</p>
+        </article>
+        <article class="card">
+          <h3>HelloWorld 호출</h3>
+          <p><code>DummyClient.cpp</code>의 <code>HelloWorld()</code> 정의는 현재 솔루션에서 확인되지 않습니다.</p>
+        </article>
+        <article class="card">
+          <h3>DestroyTLS</h3>
+          <p><code>ThreadManager::DestroyTLS()</code>는 아직 비어 있어, 종료 정리 로직이 추후 필요합니다.</p>
+        </article>
+        <article class="card">
+          <h3>종료 조건 부재</h3>
+          <p><code>GameServer</code>는 무한 루프 테스트 코드라 정상 종료 흐름은 아직 없습니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>다음 단계 예상</h2>
+      <div class="timeline">
+        <article class="step">
+          <div class="step-no">1</div>
+          <div>
+            <h3>Winsock 초기화</h3>
+            <p>네트워크 사용을 위한 기본 초기화 코드 추가</p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="step-no">2</div>
+          <div>
+            <h3>IOCP 코어 생성</h3>
+            <p>완료 포트를 만들고 워커 스레드와 연결하는 구조 설계</p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="step-no">3</div>
+          <div>
+            <h3>리슨 소켓과 Accept 처리</h3>
+            <p>클라이언트 접속을 받아들이는 서버 진입점 구성</p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="step-no">4</div>
+          <div>
+            <h3>세션 / Overlapped 구조 도입</h3>
+            <p><code>Recv</code>, <code>Send</code>, 연결 종료 흐름을 객체화</p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="step-no">5</div>
+          <div>
+            <h3>패킷 처리 및 작업 분배</h3>
+            <p>완료 통지 이후 실제 서버 로직으로 이어지는 처리 파이프라인 구성</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <footer>
+      프로젝트 문서 파일: <code>README.md</code> / 시각화 페이지: <code>project-overview.html</code>
+    </footer>
+  </div>
+</body>
+</html>

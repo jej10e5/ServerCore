@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>운영체제 Virtual Memory 자세히 보기</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d2128; --border:#2a2f3a;
+    --text:#e5e7eb; --muted:#9aa3b2; --accent:#7cc4ff; --accent2:#ffd28a;
+    --good:#7ddc9c; --bad:#ff8a8a; --warn:#ffd28a;
+    --kw:#c792ea; --ty:#82aaff; --cm:#5c6370;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:"Pretendard","Segoe UI","Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+    line-height:1.7;font-size:16px}
+  header{padding:30px 24px 24px;border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg,#10141c,#0f1115)}
+  header .inner,.wrap,nav .inner{max-width:1120px;margin:0 auto}
+  h1{margin:0 0 8px;font-size:29px;letter-spacing:0}
+  header p{margin:0;color:var(--muted)}
+  nav{position:sticky;top:0;z-index:10;background:#10141c;border-bottom:1px solid var(--border);
+    padding:10px 24px;white-space:nowrap;overflow-x:auto}
+  nav a{display:inline-block;margin-right:16px;color:var(--muted);font-size:14px;text-decoration:none}
+  nav a:hover{color:var(--accent)}
+  .wrap{padding:30px 24px 80px}
+  section{margin:44px 0}
+  h2{font-size:22px;border-left:4px solid var(--accent);padding-left:12px;margin:0 0 16px}
+  h3{font-size:17px;color:#cfd6e2;margin:22px 0 8px}
+  p{margin:8px 0}
+  ul,ol{margin:8px 0 8px 22px;padding:0}
+  li{margin:5px 0}
+  .lead{color:var(--muted)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media (max-width:860px){.grid,.grid3{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px 18px}
+  .card h3{margin-top:0}
+  code{background:#0b0d12;border:1px solid var(--border);border-radius:4px;
+    padding:1px 6px;color:#e7c794;font-size:13.5px}
+  pre{background:#0b0d12;border:1px solid var(--border);border-radius:8px;
+    padding:14px 16px;overflow:auto;font-family:"Cascadia Code","Consolas","D2Coding",monospace;
+    font-size:13.5px;line-height:1.55;margin:10px 0 14px}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:14px}
+  th,td{border:1px solid var(--border);padding:9px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:#cfd6e2}
+  .callout{border-left:4px solid var(--accent2);background:#1c1a14;border-radius:0 6px 6px 0;
+    padding:11px 14px;margin:14px 0}
+  .callout.good{border-color:var(--good);background:#141c17}
+  .callout.bad{border-color:var(--bad);background:#1c1414}
+  .callout.info{border-color:var(--accent);background:#141c22}
+  .diagram{background:#0b0d12;border:1px solid var(--border);border-radius:8px;
+    padding:16px;overflow:auto;font-family:"Cascadia Code","Consolas",monospace;
+    color:#cfd6e2;white-space:pre;font-size:13.5px;line-height:1.5;margin:12px 0}
+  .flow{display:grid;grid-template-columns:1fr 70px 1fr;gap:10px;align-items:center;margin:14px 0}
+  @media (max-width:760px){.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg);margin:auto}}
+  .box{background:#0b0d12;border:1px solid var(--border);border-radius:8px;padding:14px}
+  .box strong{display:block;color:#cfd6e2;margin-bottom:6px}
+  .arrow{text-align:center;color:var(--accent);font-family:"Cascadia Code","Consolas",monospace}
+  .pages{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:8px;margin:12px 0}
+  @media (max-width:760px){.pages{grid-template-columns:1fr 1fr}}
+  .page{border:1px solid var(--border);background:#0b0d12;border-radius:6px;min-height:96px;
+    padding:9px;font-family:"Cascadia Code","Consolas",monospace;font-size:12.5px;color:var(--muted)}
+  .page strong{display:block;color:#cfd6e2;margin-bottom:6px}
+  .state{display:block;border-radius:4px;padding:4px 6px;margin-top:10px;text-align:center}
+  .rw{background:#173522;border:1px solid #2c5b39;color:#b6f0c7}
+  .no{background:#351b1b;border:1px solid #673232;color:#ffb3b3}
+  .reserve{background:#2b2617;border:1px dashed #69562a;color:#ffd28a}
+  .file{background:#142233;border:1px solid #28445f;color:#abd8ff}
+  .footer{margin-top:54px;padding-top:18px;border-top:1px solid var(--border);
+    color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <div class="inner">
+    <h1>운영체제 Virtual Memory 자세히 보기</h1>
+    <p>프로세스가 보는 주소와 실제 RAM 사이에서 OS와 CPU가 무엇을 하는지 정리</p>
+  </div>
+</header>
+
+<nav>
+  <div class="inner">
+    <a href="#why">왜 필요한가</a>
+    <a href="#address-space">주소 공간</a>
+    <a href="#page">페이지</a>
+    <a href="#translation">주소 변환</a>
+    <a href="#fault">Page Fault</a>
+    <a href="#reserve">Reserve/Commit</a>
+    <a href="#protection">보호</a>
+    <a href="#summary">요약</a>
+  </div>
+</nav>
+
+<main class="wrap">
+  <section id="why">
+    <h2>1. Virtual Memory는 왜 필요한가?</h2>
+    <p>
+      프로그램에서 포인터를 보면 마치 메모리 주소를 직접 다루는 것처럼 느껴진다.
+      하지만 현대 OS에서 프로세스가 보는 주소는 실제 RAM 주소가 아니라
+      <strong>가상 주소</strong>다.
+    </p>
+    <div class="grid3">
+      <div class="card">
+        <h3>격리</h3>
+        <p>프로세스 A가 프로세스 B의 메모리를 마음대로 건드리지 못하게 한다.</p>
+      </div>
+      <div class="card">
+        <h3>편의</h3>
+        <p>각 프로세스는 자신만의 넓고 연속적인 주소 공간을 가진 것처럼 코드를 작성할 수 있다.</p>
+      </div>
+      <div class="card">
+        <h3>효율</h3>
+        <p>필요한 부분만 실제 메모리에 올리고, 파일이나 디스크 공간과 연결해 사용할 수 있다.</p>
+      </div>
+    </div>
+    <div class="callout info">
+      핵심 감각: <strong>포인터 값은 실제 RAM 칩의 위치가 아니라, 현재 프로세스의 가상 주소 공간 안에서의 위치</strong>다.
+    </div>
+  </section>
+
+  <section id="address-space">
+    <h2>2. 프로세스마다 독립적인 주소 공간이 있다</h2>
+    <p>
+      같은 숫자 주소라도 프로세스마다 의미가 다를 수 있다.
+      예를 들어 A 프로세스의 <code>0x000001234000</code>과 B 프로세스의
+      <code>0x000001234000</code>은 같은 숫자지만 서로 다른 메모리를 가리킬 수 있다.
+    </p>
+    <div class="diagram">Process A virtual address space
+0x0000 ---------------- [ code ][ heap ][ stack ] ---------------- 0xFFFF...
+
+Process B virtual address space
+0x0000 ---------------- [ code ][ heap ][ stack ] ---------------- 0xFFFF...
+
+같은 가상 주소 숫자라도 각 프로세스의 page table이 다르면 실제 연결 대상이 다르다.</div>
+    <p>
+      이 독립성 덕분에 한 프로세스의 포인터 버그가 곧바로 다른 프로세스의 메모리를 망가뜨리지 않는다.
+      OS는 프로세스마다 별도의 주소 변환 정보를 관리한다.
+    </p>
+  </section>
+
+  <section id="page">
+    <h2>3. Virtual Memory의 기본 단위: Page</h2>
+    <p>
+      OS는 가상 메모리를 바이트 하나씩 관리하지 않는다.
+      보통 <strong>페이지</strong>라는 고정 크기 블록 단위로 관리한다.
+      Windows/x64 환경에서 흔히 보는 기본 페이지 크기는 4KB, 즉 <code>0x1000</code> 바이트다.
+    </p>
+    <div class="pages">
+      <div class="page"><strong>Page 0</strong>4KB<span class="rw state">READ/WRITE</span></div>
+      <div class="page"><strong>Page 1</strong>4KB<span class="rw state">READ/WRITE</span></div>
+      <div class="page"><strong>Page 2</strong>4KB<span class="no state">NO ACCESS</span></div>
+      <div class="page"><strong>Page 3</strong>4KB<span class="reserve state">RESERVED</span></div>
+    </div>
+    <p>
+      페이지 단위라는 사실은 매우 중요하다.
+      접근 권한, 실제 메모리 연결, 디스크로 밀려나는 단위, page fault 처리 단위가 모두 페이지를 기준으로 움직인다.
+    </p>
+  </section>
+
+  <section id="translation">
+    <h2>4. 가상 주소는 어떻게 실제 메모리로 바뀌는가?</h2>
+    <p>
+      CPU가 메모리에 접근하려고 하면, MMU라는 하드웨어가 가상 주소를 물리 주소로 변환한다.
+      이때 OS가 만들어 둔 <strong>page table</strong>을 참고한다.
+    </p>
+    <div class="flow">
+      <div class="box">
+        <strong>Virtual Address</strong>
+        프로그램이 사용하는 포인터 값<br>
+        예: <code>0x7FF6_1234_5678</code>
+      </div>
+      <div class="arrow">---&gt;</div>
+      <div class="box">
+        <strong>Page Table</strong>
+        가상 페이지가 어느 물리 프레임에 연결되는지 기록한 표
+      </div>
+    </div>
+    <div class="flow">
+      <div class="box">
+        <strong>Physical Address</strong>
+        실제 RAM의 위치
+      </div>
+      <div class="arrow">&lt;---</div>
+      <div class="box">
+        <strong>MMU</strong>
+        CPU 안에서 주소 변환과 권한 검사를 수행하는 하드웨어
+      </div>
+    </div>
+    <div class="diagram">가상 주소의 대략적인 분해
+
+[ virtual page number ][ page offset ]
+          |                    |
+          |                    +-- 페이지 안에서 몇 번째 바이트인지
+          |
+          +-- page table에서 어떤 물리 프레임인지 찾는 데 사용
+
+결과:
+[ physical frame number ][ 같은 page offset ]</div>
+    <p>
+      페이지 안의 offset은 변하지 않는다. 바뀌는 것은 “어느 페이지인가”에 해당하는 앞부분이다.
+      그래서 page table은 가상 페이지 번호를 물리 프레임 번호로 매핑하는 표라고 생각하면 된다.
+    </p>
+  </section>
+
+  <section id="fault">
+    <h2>5. Page Fault는 무조건 오류가 아니다</h2>
+    <p>
+      Page fault라는 말을 보면 곧바로 크래시를 떠올리기 쉽지만, 사실 page fault는
+      “CPU가 접근하려는 페이지를 현재 상태로는 바로 처리할 수 없다”는 신호에 가깝다.
+      OS가 처리할 수 있으면 정상적으로 계속 진행되고, 처리할 수 없으면 접근 위반이 된다.
+    </p>
+    <table>
+      <tr>
+        <th>상황</th>
+        <th>OS의 처리</th>
+        <th>결과</th>
+      </tr>
+      <tr>
+        <td>페이지가 아직 RAM에 올라와 있지 않음</td>
+        <td>디스크나 파일에서 페이지를 가져온다.</td>
+        <td>프로그램은 잠깐 멈췄다가 계속 실행</td>
+      </tr>
+      <tr>
+        <td>예약만 되어 있고 commit되지 않음</td>
+        <td>접근을 허용할 수 없다.</td>
+        <td>접근 위반 가능</td>
+      </tr>
+      <tr>
+        <td>읽기 전용 페이지에 쓰기 시도</td>
+        <td>권한 검사 실패</td>
+        <td>접근 위반 또는 copy-on-write 처리</td>
+      </tr>
+      <tr>
+        <td>전혀 유효하지 않은 주소 접근</td>
+        <td>매핑 정보가 없음</td>
+        <td>크래시</td>
+      </tr>
+    </table>
+    <div class="callout">
+      그래서 page fault는 “사건”이고, access violation은 “OS가 이 사건을 정상 처리할 수 없을 때의 결과”라고 보면 좋다.
+    </div>
+  </section>
+
+  <section id="reserve">
+    <h2>6. Reserve와 Commit</h2>
+    <p>
+      Windows의 <code>VirtualAlloc</code>을 보면 <code>MEM_RESERVE</code>,
+      <code>MEM_COMMIT</code>이라는 단어가 자주 나온다.
+      이 둘은 비슷해 보이지만 역할이 다르다.
+    </p>
+    <table>
+      <tr>
+        <th>상태</th>
+        <th>의미</th>
+        <th>접근 가능 여부</th>
+      </tr>
+      <tr>
+        <td><code>Reserved</code></td>
+        <td>가상 주소 범위를 찜해둔다. 다른 할당이 이 범위를 쓰지 못한다.</td>
+        <td>아직 접근하면 안 됨</td>
+      </tr>
+      <tr>
+        <td><code>Committed</code></td>
+        <td>OS가 이 페이지에 실제 backing을 제공하기로 약속한 상태다.</td>
+        <td>보호 속성이 허용하면 접근 가능</td>
+      </tr>
+      <tr>
+        <td><code>Free</code></td>
+        <td>아무것도 예약되지 않은 가상 주소 공간이다.</td>
+        <td>접근 불가</td>
+      </tr>
+    </table>
+    <div class="diagram">비유
+
+Reserve  = 이 땅은 내가 쓸 거니까 다른 사람은 쓰지 마.
+Commit   = 이제 이 땅에 실제로 건물을 세우고 사용할 수 있게 해줘.
+Protect  = 이 건물은 읽기만 가능 / 읽고 쓰기 가능 / 출입 금지.</div>
+  </section>
+
+  <section id="protection">
+    <h2>7. Protection: 페이지별 접근 권한</h2>
+    <p>
+      가상 메모리의 큰 장점은 페이지마다 접근 권한을 줄 수 있다는 점이다.
+      이 기능 덕분에 스택 가드, 실행 방지, 읽기 전용 코드 영역, guard page 같은 기법이 가능해진다.
+    </p>
+    <table>
+      <tr>
+        <th>권한</th>
+        <th>의미</th>
+        <th>예시</th>
+      </tr>
+      <tr>
+        <td><code>PAGE_READWRITE</code></td>
+        <td>읽기와 쓰기가 가능하다.</td>
+        <td>heap, 일반 데이터</td>
+      </tr>
+      <tr>
+        <td><code>PAGE_READONLY</code></td>
+        <td>읽기는 가능하지만 쓰기는 불가능하다.</td>
+        <td>상수 데이터, 일부 매핑 파일</td>
+      </tr>
+      <tr>
+        <td><code>PAGE_NOACCESS</code></td>
+        <td>읽기, 쓰기 모두 불가능하다.</td>
+        <td>guard page, 접근 감지용 페이지</td>
+      </tr>
+      <tr>
+        <td>실행 권한</td>
+        <td>코드를 실행할 수 있는지 제어한다.</td>
+        <td>DEP/NX 같은 보안 기능</td>
+      </tr>
+    </table>
+    <div class="callout good">
+      allocator 디버깅에서 guard page를 쓰는 이유가 여기에 있다.
+      객체 뒤에 <code>PAGE_NOACCESS</code> 페이지를 두면, 객체 범위를 넘어 쓰는 순간 OS가 접근 위반으로 알려줄 수 있다.
+    </div>
+  </section>
+
+  <section>
+    <h2>8. Stack, Heap, Code도 결국 가상 메모리 위에 있다</h2>
+    <p>
+      우리가 평소 말하는 stack, heap, code 영역도 프로세스의 가상 주소 공간 안에 배치된 영역들이다.
+      차이는 누가 관리하고 어떤 용도로 쓰느냐에 있다.
+    </p>
+    <table>
+      <tr>
+        <th>영역</th>
+        <th>주 용도</th>
+        <th>특징</th>
+      </tr>
+      <tr>
+        <td>Code</td>
+        <td>실행할 명령어</td>
+        <td>보통 읽기/실행 가능, 쓰기는 제한</td>
+      </tr>
+      <tr>
+        <td>Stack</td>
+        <td>함수 호출, 지역 변수</td>
+        <td>스레드마다 존재, guard page로 stack overflow 감지 가능</td>
+      </tr>
+      <tr>
+        <td>Heap</td>
+        <td>동적 할당</td>
+        <td><code>new</code>, <code>malloc</code>, allocator가 주로 사용</td>
+      </tr>
+      <tr>
+        <td>Mapped File</td>
+        <td>파일을 메모리처럼 접근</td>
+        <td>파일 내용과 가상 메모리 페이지를 연결</td>
+      </tr>
+    </table>
+  </section>
+
+  <section id="summary">
+    <h2>9. 꼭 기억할 핵심</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>포인터는 가상 주소다</h3>
+        <p>실제 RAM 주소가 아니라 현재 프로세스의 주소 공간 안에서 해석되는 값이다.</p>
+      </div>
+      <div class="card">
+        <h3>page table이 번역한다</h3>
+        <p>가상 페이지 번호를 물리 프레임 번호로 바꾸는 표가 있고, CPU의 MMU가 이를 사용한다.</p>
+      </div>
+      <div class="card">
+        <h3>OS는 페이지 단위로 관리한다</h3>
+        <p>보호, commit, page fault, swap 같은 동작은 대부분 페이지 단위로 일어난다.</p>
+      </div>
+      <div class="card">
+        <h3>page fault는 처리 가능한 사건일 수 있다</h3>
+        <p>모든 page fault가 크래시는 아니다. OS가 처리하지 못할 때 access violation이 된다.</p>
+      </div>
+    </div>
+    <div class="callout info">
+      한 문장으로 정리하면, <strong>Virtual Memory는 각 프로세스에게 독립적인 주소 공간을 제공하고, OS와 CPU가 페이지 단위로 실제 메모리와 연결하며 보호하는 시스템</strong>이다.
+    </div>
+  </section>
+
+  <div class="footer">
+    연계해서 보면 좋은 주제: page table, TLB, page fault, demand paging, copy-on-write, guard page
+  </div>
+</main>
+</body>
+</html>
