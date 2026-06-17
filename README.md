@@ -1,6 +1,6 @@
 # ServerCore
 
-Windows C++ 기반 게임 서버 코어 학습 프로젝트입니다. 현재 저장소는 서버 코어 정적 라이브러리와 이를 사용하는 서버/클라이언트 실행 프로젝트로 구성되어 있으며, 메모리 관리, 스레드/락 관리, 데드락 감지, 기본 TCP 접속 흐름을 단계적으로 구현하고 있습니다.
+Windows C++ 기반 게임 서버 코어 프로젝트입니다. 현재 저장소는 서버 코어 정적 라이브러리와 이를 사용하는 서버/클라이언트 실행 프로젝트로 구성되어 있으며, 메모리 관리, 스레드/락 관리, 데드락 감지, 기본 TCP 접속 흐름을 단계적으로 구현하고 있습니다.
 
 ## 프로젝트 구성
 
@@ -108,14 +108,6 @@ DummyClient: Connected To Server
     └── changes/              # 변경점 분석 리포트
 ```
 
-## 참고 문서
-
-아키텍처와 변경점 분석 문서는 `document/` 아래에 있습니다.
-
-- `document/architecture/memory-system.html`
-- `document/architecture/thread-locking.html`
-- `document/architecture/network-socket-flow.html`
-- `document/changes/`
 
 ## 현재 구현 범위와 다음 단계
 
