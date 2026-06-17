@@ -50,3 +50,7 @@ Thumbs.db
 Desktop.ini
 *.swp
 *.tmp
+
+# User
+document/
+.codex/
