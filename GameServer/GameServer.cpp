@@ -71,6 +71,8 @@ int main()
 		while (true)
 		{
 			char recvBuffer[1000];
+
+			this_thread::sleep_for(1s);
 			
 			int32 recvLen = ::recv(clientSocket, recvBuffer, sizeof(recvBuffer),0);
 			if (recvLen <= 0)
@@ -83,7 +85,7 @@ int main()
 			cout << "Recv Data! Data = " << recvBuffer << endl;
 			cout << "Recv Data! Len = " << recvLen << endl;
 
-			//echo server
+			/*
 			int32 resultCode = ::send(clientSocket, recvBuffer, recvLen, 0);
 			if (resultCode == SOCKET_ERROR)
 			{
@@ -91,7 +93,7 @@ int main()
 				cout << "Send ErrorCode : " << errCode << endl;
 				return 0;
 			}
-			
+			*/
 
 		}
 	}
