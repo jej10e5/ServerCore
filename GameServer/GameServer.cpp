@@ -12,6 +12,11 @@
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 
+void HandleError(const char* cause)
+{
+	int32 errCode = ::WSAGetLastError();
+	cout << cause << " ErrorCode : " << errCode << endl;
+}
 
 int main()
 {
@@ -19,86 +24,42 @@ int main()
 	if (::WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
 		return 0;
 
-	SOCKET listenSocket = ::socket(AF_INET, SOCK_STREAM, 0);
-	if (listenSocket == INVALID_SOCKET)
+	SOCKET serverSocket = ::socket(AF_INET, SOCK_STREAM, 0);
+	if (serverSocket == INVALID_SOCKET)
 	{
-		int32 errCode = ::WSAGetLastError();
-		cout << "Socket ErrorCode : " << errCode << endl;
+		HandleError("Socket");
 		return 0;
 	}
 
-	SOCKADDR_IN serverAddr; //IPv4
-	::memset(&serverAddr, 0, sizeof(serverAddr));
-	serverAddr.sin_family = AF_INET;
-	serverAddr.sin_addr.s_addr = ::htonl(INADDR_ANY); 
-	serverAddr.sin_port = ::htons(7777);
-
-	if (::bind(listenSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
-	{
-		int32 errCode = ::WSAGetLastError();
-		cout << "Bind ErrorCode : " << errCode << endl;
-		return 0;
-	}
-
-	if (::listen(listenSocket, 10) == SOCKET_ERROR)
-	{
-		int32 errCode = ::WSAGetLastError();
-		cout << "Listen ErrorCode : " << errCode << endl;
-		return 0;
-	}
-
-	//------------------------------------
+	// 옵션을 해석하고 처리할 주체?
+	// 소켓 코드 -> SOL_SOCKET
+	// Ipv4 -> IPPROTO_IP
+	// TCP 프로토콜 -> IPPROTO_TCP
 	
-	while (true)
-	{
-		SOCKADDR_IN clientAddr; //IPv4
-		::memset(&clientAddr, 0, sizeof(clientAddr));
-		int32 addrLen = sizeof(clientAddr);
-		
-		SOCKET clientSocket = ::accept(listenSocket, (SOCKADDR*)&clientAddr, &addrLen);
-		if (clientSocket == INVALID_SOCKET)
-		{
-			int32 errCode = ::WSAGetLastError();
-			cout << "Accept ErrorCode : " << errCode << endl;
-			return 0;
-		}
+	// SO_KEEPALIVE = 주기적으로 연결 상태 확인 여부 (TCP only)
+	// 상대방이 소리소문없이 연결 끊는다면?
+	// 주기적으로 TCP 프로토콜 연결 상태 확인 -> 끊어진 연결 감지
+	bool enable = true;
+	::setsockopt(serverSocket, SOL_SOCKET, SO_KEEPALIVE, (char*)&enable, sizeof(enable));
 
-		char ipAddress[16];
-		::inet_ntop(AF_INET, &clientAddr.sin_addr, ipAddress, sizeof(ipAddress));
-		cout << "Client Connected! IP = " << ipAddress << endl;
+	// SO_LINGER = 지연하다
+	// 송신 버퍼에 있는 데이터를 보낼 것인가? 날릴 것인가?
+	// onoff = 0 이면 closesocket()이 바로 리턴, 아니면 linger초만큼 대기(default 0)
+	// linger : 대기 시간
+	LINGER linger;
+	linger.l_onoff = 1;
+	linger.l_linger = 5;
+	::setsockopt(serverSocket, SOL_SOCKET, SO_LINGER, (char*)&linger, sizeof(linger));
 
-		// TODO
-		while (true)
-		{
-			char recvBuffer[1000];
-
-			this_thread::sleep_for(1s);
-			
-			int32 recvLen = ::recv(clientSocket, recvBuffer, sizeof(recvBuffer),0);
-			if (recvLen <= 0)
-			{
-				int32 errCode = ::WSAGetLastError();
-				cout << "Recv ErrorCode : " << errCode << endl;
-				return 0;
-			}
-
-			cout << "Recv Data! Data = " << recvBuffer << endl;
-			cout << "Recv Data! Len = " << recvLen << endl;
-
-			/*
-			int32 resultCode = ::send(clientSocket, recvBuffer, recvLen, 0);
-			if (resultCode == SOCKET_ERROR)
-			{
-				int32 errCode = ::WSAGetLastError();
-				cout << "Send ErrorCode : " << errCode << endl;
-				return 0;
-			}
-			*/
-
-		}
-	}
-
-	//------------------------------------
+	// Half-Close
+	// SD_SEND : send 막는다
+	// SD_RECEIVE : recv 막는다
+	// SD_BOTH : 둘다 막는다
+	::shutdown(serverSocket, SD_SEND);
+	
+	// 소켓 리소스 반환
+	// send -> close socket
+	::closesocket(serverSocket);
 
 	// 윈속 종료
 	::WSACleanup();
