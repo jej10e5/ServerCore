@@ -26,7 +26,8 @@ int main()
 	}
 
 	u_long on = 1;
-	::ioctlsocket(clientSocket, FIONBIO, &on);
+	if (::ioctlsocket(clientSocket, FIONBIO, &on) == INVALID_SOCKET)
+		return 0;
 
 	SOCKADDR_IN serverAddr;
 	::memset(&serverAddr, 0, sizeof(serverAddr));
