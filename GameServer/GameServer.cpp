@@ -25,4 +25,6 @@ int main()
 	{
 
 	}
+
+	GThreadManager->Join();
 }
