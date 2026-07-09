@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>이벤트 기반 다중화</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <p><a href="index.html">← index</a></p>
+  <h1>이벤트 기반 다중화</h1>
+  <p class="lead">관련 커밋: <code>de123b0 SELECT모델</code>, <code>eed3fc6 WSAEventSelect모델</code></p>
+
+  <section class="concept">
+    <h2>개념 한눈에 보기</h2>
+    <p>
+      이벤트 기반 다중화는 여러 소켓을 하나의 루프에서 감시하고, 준비된 소켓만 처리하는 방식입니다.
+      <code>select</code>는 <code>fd_set</code>에 관심 소켓을 넣고 읽기/쓰기 가능 여부를 확인합니다.
+      <code>WSAEventSelect</code>는 소켓 이벤트를 <code>WSAEVENT</code> 객체와 연결하고, 발생한 네트워크 이벤트를 나중에 조회합니다.
+    </p>
+  </section>
+
+  <section class="diagram">
+    <p class="diagram-title">Reactor 스타일 처리 흐름</p>
+    <div class="flow">
+      <span class="node">관심 등록</span>
+      <span class="arrow">→</span>
+      <span class="node">대기</span>
+      <span class="arrow">→</span>
+      <span class="node warn">준비됨</span>
+      <span class="arrow">→</span>
+      <span class="node server">recv/send</span>
+      <span class="arrow">→</span>
+      <span class="node">다시 등록</span>
+    </div>
+  </section>
+
+  <h2>무엇을 배웠나</h2>
+  <p>
+    논블로킹 소켓만 사용하면 준비되지 않은 소켓을 계속 검사하게 됩니다.
+    이 단계에서는 소켓이 읽기/쓰기 가능한 시점을 운영체제에 물어보고, 준비된 소켓만 처리하는 구조로 발전합니다.
+  </p>
+
+  <h2>select 모델</h2>
+  <p>
+    <code>select</code>는 읽기/쓰기/예외 감시 집합을 만들고, 준비된 소켓만 집합에 남겨주는 모델입니다.
+    Windows와 Linux 모두에 있는 범용 모델이라 개념 학습에 좋지만, 매번 집합을 다시 등록해야 하고 기본 <code>FD_SETSIZE</code> 제한이 작습니다.
+  </p>
+
+  <pre><code class="language-cpp">FD_ZERO(&reads);
+FD_ZERO(&writes);
+
+FD_SET(listenSocket, &reads);
+
+for (Session& s : sessions)
+{
+    if (s.recvBytes &lt;= s.sendBytes)
+        FD_SET(s.socket, &reads);
+    else
+        FD_SET(s.socket, &writes);
+}
+
+int32 retVal = ::select(0, &reads, &writes, nullptr, nullptr);
+if (retVal == SOCKET_ERROR)
+    break;</code></pre>
+
+  <h2>select에서 세션 처리</h2>
+  <pre><code class="language-cpp">if (FD_ISSET(s.socket, &reads))
+{
+    int32 recvLen = ::recv(s.socket, s.recvBuffer, BUFSIZE, 0);
+    if (recvLen &lt;= 0)
+        continue;
+
+    s.recvBytes = recvLen;
+}
+
+if (FD_ISSET(s.socket, &writes))
+{
+    int32 sendLen = ::send(
+        s.socket,
+        &s.recvBuffer[s.sendBytes],
+        s.recvBytes - s.sendBytes,
+        0);
+
+    s.sendBytes += sendLen;
+}</code></pre>
+
+  <h2>WSAEventSelect 모델</h2>
+  <p>
+    <code>WSAEventSelect</code>는 소켓과 <code>WSAEVENT</code> 객체를 연결하고, 네트워크 이벤트가 발생했을 때 이벤트 객체가 signaled 상태가 되게 합니다.
+    <code>FD_ACCEPT</code>, <code>FD_READ</code>, <code>FD_WRITE</code>, <code>FD_CLOSE</code> 같은 이벤트 단위로 처리할 수 있습니다.
+  </p>
+
+  <pre><code class="language-cpp">WSAEVENT listenEvent = ::WSACreateEvent();
+wsaEvents.push_back(listenEvent);
+sessions.push_back(Session{ listenSocket });
+
+if (::WSAEventSelect(listenSocket, listenEvent, FD_ACCEPT | FD_CLOSE) == SOCKET_ERROR)
+    return 0;
+
+int32 index = ::WSAWaitForMultipleEvents(
+    wsaEvents.size(),
+    &wsaEvents[0],
+    FALSE,
+    WSA_INFINITE,
+    FALSE);
+
+index -= WSA_WAIT_EVENT_0;</code></pre>
+
+  <h2>네트워크 이벤트 해석</h2>
+  <pre><code class="language-cpp">WSANETWORKEVENTS networkEvents;
+if (::WSAEnumNetworkEvents(sessions[index].socket, wsaEvents[index], &networkEvents) == SOCKET_ERROR)
+    continue;
+
+if (networkEvents.lNetworkEvents & FD_ACCEPT)
+{
+    SOCKET clientSocket = ::accept(listenSocket, (SOCKADDR*)&clientAddr, &addrLen);
+
+    WSAEVENT clientEvent = ::WSACreateEvent();
+    wsaEvents.push_back(clientEvent);
+    sessions.push_back(Session{ clientSocket });
+
+    ::WSAEventSelect(clientSocket, clientEvent, FD_READ | FD_WRITE | FD_CLOSE);
+}</code></pre>
+
+  <h2>비교</h2>
+  <ul>
+    <li><code>select</code>: 이식성이 좋고 구조가 단순하지만 매번 집합 구성 비용이 있습니다.</li>
+    <li><code>WSAEventSelect</code>: Windows 이벤트 객체와 잘 맞지만, 대기 가능한 이벤트 수 제한 때문에 대규모 서버에는 한계가 있습니다.</li>
+    <li>두 모델 모두 “준비되면 호출하는” Reactor 패턴에 가깝습니다.</li>
+  </ul>
+
+  <section class="sources">
+    <h2>참고 자료</h2>
+    <ul>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-select">Microsoft Learn - select function</a></li>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsaeventselect">Microsoft Learn - WSAEventSelect function</a></li>
+    </ul>
+  </section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>

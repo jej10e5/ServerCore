@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>IOCP owner 기반 Dispatch 흐름</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <p><a href="index.html">Index</a></p>
+  <h1>IOCP owner 기반 Dispatch 흐름</h1>
+  <p class="lead">
+    Service 추가 이후의 로컬 구현을 기준으로 정리한다. 현재 코드는
+    <code>CreateIoCompletionPort</code>의 completion key가 아니라
+    <code>IocpEvent::owner</code>를 보고 실제 <code>Dispatch</code> 대상 객체를 찾는다.
+    그래서 accept 완료는 <code>Listener::Dispatch</code>로 가고, recv/send 완료는
+    각 이벤트의 owner를 <code>Session</code>으로 넣었을 때 <code>Session::Dispatch</code>로 간다.
+  </p>
+
+  <section class="concept">
+    <h2>핵심 결론</h2>
+    <p>
+      IOCP에 socket을 등록하는 일과, 완료 이벤트를 어떤 객체가 처리할지 정하는 일은 현재 코드에서 분리되어 있다.
+      <code>Service::CreateSession</code>은 session socket을 IOCP에 연결하지만, 그 자체만으로
+      <code>Session::Dispatch</code>가 호출되지는 않는다. 실제 호출 대상은
+      <code>GetQueuedCompletionStatus</code>가 돌려준 <code>IocpEvent</code> 안의
+      <code>owner</code>가 결정한다.
+    </p>
+  </section>
+
+  <section class="diagram">
+    <p class="diagram-title">현재 로컬 코드의 라우팅 기준</p>
+    <div class="relationship">
+      <div class="box">
+        <strong>AcceptEvent</strong>
+        <span>owner = Listener</span>
+        <span>session = 새 Session</span>
+      </div>
+      <div class="connector">AcceptEx 완료</div>
+      <div class="box highlight">
+        <strong>IocpCore::Dispatch</strong>
+        <span>iocpEvent-&gt;owner 확인</span>
+        <span>owner-&gt;Dispatch(...)</span>
+      </div>
+      <div class="connector">owner가 Listener</div>
+      <div class="box">
+        <strong>Listener::Dispatch</strong>
+        <span>AcceptEvent 처리</span>
+        <span>ProcessAccept 호출</span>
+      </div>
+    </div>
+  </section>
+
+  <h2>IocpCore::Register</h2>
+  <p>
+    현재 <code>Register</code>는 객체의 socket handle을 IOCP handle에 연결한다.
+    하지만 completion key에는 객체 포인터를 넣지 않고 <code>0</code>을 넣는다.
+    따라서 완료 통지를 꺼낼 때 <code>key</code>만 봐서는 Listener인지 Session인지 알 수 없다.
+  </p>
+
+  <pre><code class="language-cpp">bool IocpCore::Register(IocpObjectRef iocpObject)
+{
+    return ::CreateIoCompletionPort(
+        iocpObject-&gt;GetHandle(),
+        _iocpHandle,
+        /*key*/0,
+        0);
+}</code></pre>
+
+  <h2>IocpCore::Dispatch</h2>
+  <p>
+    completion key 대신 <code>OVERLAPPED</code>로 돌아온 이벤트 객체를
+    <code>IocpEvent*</code>로 해석한다. 그리고 그 이벤트의 <code>owner</code>를 꺼내
+    다형성으로 <code>Dispatch</code>를 호출한다.
+  </p>
+
+  <pre><code class="language-cpp">bool IocpCore::Dispatch(uint32 timeoutMs)
+{
+    DWORD numOfBytes = 0;
+    ULONG_PTR key = 0;
+    IocpEvent* iocpEvent = nullptr;
+
+    if (::GetQueuedCompletionStatus(
+        _iocpHandle,
+        OUT &amp;numOfBytes,
+        OUT &amp;key,
+        OUT reinterpret_cast&lt;LPOVERLAPPED*&gt;(&amp;iocpEvent),
+        timeoutMs))
+    {
+        IocpObjectRef iocpObject = iocpEvent-&gt;owner;
+        iocpObject-&gt;Dispatch(iocpEvent, numOfBytes);
+    }
+
+    return true;
+}</code></pre>
+
+  <section class="concept">
+    <h2>왜 Accept는 Listener로 가나?</h2>
+    <p>
+      accept 작업에 사용하는 이벤트는 <code>AcceptEvent</code>다.
+      <code>Listener::StartAccept</code>에서 이 이벤트의 owner를
+      <code>shared_from_this()</code>, 즉 Listener 자신으로 지정한다.
+      그래서 <code>AcceptEx</code>가 완료되면 IOCP에서 되돌아온 이벤트의 owner가 Listener이고,
+      결과적으로 <code>Listener::Dispatch</code>가 실행된다.
+    </p>
+  </section>
+
+  <pre><code class="language-cpp">const int32 acceptCount = _service-&gt;GetMaxSessionCount();
+for (int32 i = 0; i &lt; acceptCount; i++)
+{
+    AcceptEvent* acceptEvent = xnew&lt;AcceptEvent&gt;();
+    acceptEvent-&gt;owner = shared_from_this();
+    _acceptEvents.push_back(acceptEvent);
+    RegisterAccept(acceptEvent);
+}</code></pre>
+
+  <h2>RegisterAccept</h2>
+  <p>
+    <code>RegisterAccept</code>는 다음 접속을 받기 위해 새 Session을 만들고,
+    그 session의 client socket을 <code>AcceptEx</code>에 넘긴다.
+    여기서 <code>acceptEvent-&gt;session</code>은 accept가 끝났을 때
+    어떤 Session이 연결되었는지 알기 위한 저장 공간이다.
+    Dispatch 대상은 여전히 <code>acceptEvent-&gt;owner</code>인 Listener다.
+  </p>
+
+  <pre><code class="language-cpp">void Listener::RegisterAccept(AcceptEvent* acceptEvent)
+{
+    SessionRef session = _service-&gt;CreateSession();
+
+    acceptEvent-&gt;Init();
+    acceptEvent-&gt;session = session;
+
+    DWORD bytesReceived = 0;
+    SocketUtils::AcceptEx(
+        _socket,
+        session-&gt;GetSocket(),
+        session-&gt;_recvBuffer,
+        0,
+        sizeof(SOCKADDR_IN) + 16,
+        sizeof(SOCKADDR_IN) + 16,
+        OUT &amp;bytesReceived,
+        static_cast&lt;LPOVERLAPPED&gt;(acceptEvent));
+}</code></pre>
+
+  <h2>Service::CreateSession</h2>
+  <p>
+    Service는 factory로 실제 Session 타입을 만든다. GameServer에서는
+    <code>MakeShared&lt;GameSession&gt;</code>을 넘기므로, 여기서 생성되는 객체는
+    <code>Session</code>을 상속한 <code>GameSession</code>이다.
+    생성 직후 session socket도 IOCP에 등록된다.
+  </p>
+
+  <pre><code class="language-cpp">SessionRef Service::CreateSession()
+{
+    SessionRef session = _sessionFactory();
+    if (_iocpCore-&gt;Register(session) == false)
+        return nullptr;
+
+    return session;
+}</code></pre>
+
+  <p>
+    이 등록은 중요하다. 나중에 이 session socket에 대해 <code>WSARecv</code>나
+    <code>WSASend</code> 같은 overlapped I/O를 걸면, 그 완료 통지가 같은 IOCP queue로 들어온다.
+    다만 어떤 객체의 <code>Dispatch</code>를 부를지는 그때 넘긴 이벤트의 owner가 결정한다.
+  </p>
+
+  <h2>Session::Dispatch가 실행되는 조건</h2>
+  <p>
+    <code>Session::Dispatch</code>가 실행되려면 recv/send/connect 같은 Session 소유 작업의 이벤트 owner를
+    Session으로 세팅해야 한다. 아직 현재 <code>Session::Dispatch</code>는 TODO 상태이므로,
+    이후 recv/send 구현에서 다음과 같은 구조가 들어오게 된다.
+  </p>
+
+  <pre><code class="language-cpp">void Session::RegisterRecv()
+{
+    _recvEvent.Init();
+    _recvEvent.owner = shared_from_this();
+
+    WSABUF wsaBuf;
+    wsaBuf.buf = _recvBuffer;
+    wsaBuf.len = sizeof(_recvBuffer);
+
+    DWORD numOfBytes = 0;
+    DWORD flags = 0;
+    ::WSARecv(
+        _socket,
+        &amp;wsaBuf,
+        1,
+        OUT &amp;numOfBytes,
+        OUT &amp;flags,
+        static_cast&lt;LPWSAOVERLAPPED&gt;(&amp;_recvEvent),
+        nullptr);
+}</code></pre>
+
+  <section class="diagram">
+    <p class="diagram-title">Accept 이후 Recv가 추가되면 생기는 흐름</p>
+    <div class="flow flow-wide">
+      <span class="node">ProcessAccept</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node">session-&gt;RegisterRecv</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node warn">RecvEvent owner = Session</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node server">IOCP queue</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node">IocpCore::Dispatch</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node">Session::Dispatch</span>
+    </div>
+  </section>
+
+  <h2>한 줄로 정리</h2>
+  <ul>
+    <li><code>Register(listener)</code>: listen socket의 완료 통지를 IOCP로 보내게 연결한다.</li>
+    <li><code>acceptEvent-&gt;owner = Listener</code>: accept 완료 처리자는 Listener라고 표시한다.</li>
+    <li><code>Register(session)</code>: session socket의 완료 통지를 IOCP로 보내게 연결한다.</li>
+    <li><code>recvEvent-&gt;owner = Session</code>: recv 완료 처리자는 Session이라고 표시한다.</li>
+    <li><code>IocpCore::Dispatch</code>: 완료된 이벤트의 owner를 꺼내 그 객체의 Dispatch를 호출한다.</li>
+  </ul>
+
+  <section class="sources">
+    <h2>읽을 때 주의할 점</h2>
+    <p>
+      예전 IOCP 설명에서는 completion key에 <code>IocpObject*</code>를 넣는 방식으로 설명할 수 있다.
+      하지만 지금 로컬 코드는 key에 <code>0</code>을 넣고, <code>IocpEvent::owner</code>를 사용한다.
+      두 방식 모두 가능하지만, 한 코드 안에서는 기준을 섞지 말고 일관되게 따라가야 한다.
+    </p>
+  </section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>

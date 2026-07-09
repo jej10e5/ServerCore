@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>논블로킹 소켓</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <p><a href="index.html">← index</a></p>
+  <h1>논블로킹 소켓</h1>
+  <p class="lead">관련 커밋: <code>d45a83b 논블로킹 소켓</code></p>
+
+  <section class="concept">
+    <h2>개념 한눈에 보기</h2>
+    <p>
+      논블로킹 모드에서는 소켓 함수가 조건이 만족될 때까지 기다리지 않고 즉시 돌아옵니다.
+      아직 처리할 수 없다면 <code>WSAEWOULDBLOCK</code>을 받게 되며, 이는 치명적 오류가 아니라 “나중에 다시 시도하라”는 신호입니다.
+      이 모델은 스레드 정지를 피하지만, 준비 상태를 효율적으로 감지하는 장치가 없으면 CPU를 낭비하기 쉽습니다.
+    </p>
+  </section>
+
+  <section class="diagram">
+    <p class="diagram-title">블로킹과 논블로킹의 차이</p>
+    <div class="state-grid">
+      <div class="state"><strong>Blocking recv</strong>데이터가 올 때까지 스레드가 멈춤</div>
+      <div class="state"><strong>Non-blocking recv</strong>데이터가 없으면 즉시 <code>WSAEWOULDBLOCK</code></div>
+      <div class="state"><strong>장점</strong>한 스레드가 멈추지 않고 다른 일을 할 수 있음</div>
+      <div class="state"><strong>주의</strong>무작정 루프를 돌면 busy polling이 됨</div>
+    </div>
+  </section>
+
+  <h2>무엇을 배웠나</h2>
+  <p>
+    블로킹 소켓은 조건이 만족될 때까지 스레드를 멈추지만, 논블로킹 소켓은 즉시 반환합니다.
+    아직 처리할 수 없는 상태라면 WinSock은 <code>WSAEWOULDBLOCK</code>을 돌려줍니다.
+  </p>
+
+  <h2>논블로킹 전환</h2>
+  <pre><code class="language-cpp">SOCKET listenSocket = ::socket(AF_INET, SOCK_STREAM, 0);
+u_long on = 1;
+::ioctlsocket(listenSocket, FIONBIO, &on);</code></pre>
+
+  <h2>accept 처리</h2>
+  <pre><code class="language-cpp">while (true)
+{
+    SOCKET clientSocket = ::accept(listenSocket, (SOCKADDR*)&clientAddr, &addrLen);
+    if (clientSocket == INVALID_SOCKET)
+    {
+        if (::WSAGetLastError() == WSAEWOULDBLOCK)
+            continue;
+
+        break;
+    }
+
+    cout &lt;&lt; "Client Connected" &lt;&lt; endl;
+}</code></pre>
+
+  <h2>connect 처리</h2>
+  <pre><code class="language-cpp">while (true)
+{
+    if (::connect(clientSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
+    {
+        if (::WSAGetLastError() == WSAEWOULDBLOCK)
+            continue;
+
+        if (::WSAGetLastError() == WSAEISCONN)
+            break;
+
+        break;
+    }
+}</code></pre>
+
+  <h2>학습 포인트</h2>
+  <p>
+    논블로킹은 스레드를 멈추지 않는 대신 “지금 가능한가?”를 직접 계속 물어봐야 합니다.
+    이 커밋의 코드는 이해를 위해 <code>continue</code>로 반복 확인하지만, 실제 서버에서 이런 busy polling은 CPU를 낭비합니다.
+    그래서 다음 단계의 <code>select</code>, <code>WSAEventSelect</code>, Overlapped I/O 같은 준비/완료 통지 모델로 넘어갑니다.
+  </p>
+
+  <h2>send/recv에서의 핵심</h2>
+  <ul>
+    <li><code>recv</code>가 <code>SOCKET_ERROR</code>이고 에러가 <code>WSAEWOULDBLOCK</code>이면 아직 읽을 데이터가 없는 상태입니다.</li>
+    <li><code>send</code>도 송신 버퍼가 부족하면 <code>WSAEWOULDBLOCK</code>이 날 수 있습니다.</li>
+    <li>논블로킹 <code>send</code>는 일부만 성공할 수 있으므로 전송한 바이트 수를 누적해야 합니다.</li>
+  </ul>
+
+  <section class="sources">
+    <h2>참고 자료</h2>
+    <ul>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-ioctlsocket">Microsoft Learn - ioctlsocket function</a></li>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2">Microsoft Learn - Windows Sockets Error Codes</a></li>
+    </ul>
+  </section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>

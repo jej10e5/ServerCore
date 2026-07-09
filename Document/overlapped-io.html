@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Overlapped I/O</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <p><a href="index.html">← index</a></p>
+  <h1>Overlapped I/O</h1>
+  <p class="lead">관련 커밋: <code>20680b2 Overlapped 모델 이벤트 기반</code>, <code>cf77746 Overlapped 콜백 기반</code></p>
+
+  <section class="concept">
+    <h2>개념 한눈에 보기</h2>
+    <p>
+      Overlapped I/O는 작업이 가능해질 때까지 기다렸다가 호출하는 모델이 아니라, 먼저 비동기 작업을 요청하고 완료를 통지받는 모델입니다.
+      <code>WSA_IO_PENDING</code>은 실패가 아니라 “요청이 접수됐고 나중에 완료된다”는 의미입니다.
+      완료 통지는 이벤트 객체, 완료 루틴 콜백, 이후 단계의 IOCP 같은 방식으로 받을 수 있습니다.
+    </p>
+  </section>
+
+  <section class="diagram">
+    <p class="diagram-title">Proactor 스타일 처리 흐름</p>
+    <div class="flow">
+      <span class="node">WSARecv 요청</span>
+      <span class="arrow">→</span>
+      <span class="node warn">WSA_IO_PENDING</span>
+      <span class="arrow">→</span>
+      <span class="node server">OS가 I/O 진행</span>
+      <span class="arrow">→</span>
+      <span class="node">완료 통지</span>
+      <span class="arrow">→</span>
+      <span class="node">결과 처리</span>
+    </div>
+  </section>
+
+  <h2>무엇을 배웠나</h2>
+  <p>
+    Overlapped I/O는 <code>WSARecv</code>, <code>WSASend</code> 같은 비동기 함수를 먼저 걸어두고, 완료를 나중에 통지받는 모델입니다.
+    이전 단계의 <code>select</code>, <code>WSAEventSelect</code>가 “가능한 시점”을 보고 나서 호출하는 Reactor 성격이라면,
+    Overlapped I/O는 작업을 미리 요청하고 완료를 받는 Proactor 성격에 더 가깝습니다.
+  </p>
+
+  <h2>세션 구조</h2>
+  <pre><code class="language-cpp">const int32 BUFSIZE = 1000;
+
+struct Session
+{
+    SOCKET socket = INVALID_SOCKET;
+    char recvBuffer[BUFSIZE] = {};
+    int32 recvBytes = 0;
+    int32 sendBytes = 0;
+    WSAOVERLAPPED overlapped = {};
+};</code></pre>
+
+  <h2>이벤트 기반 완료</h2>
+  <pre><code class="language-cpp">WSAEVENT wsaEvent = ::WSACreateEvent();
+session.overlapped.hEvent = wsaEvent;
+
+WSABUF wsaBuf;
+wsaBuf.buf = session.recvBuffer;
+wsaBuf.len = BUFSIZE;
+
+DWORD recvLen = 0;
+DWORD flags = 0;
+::memset(&session.overlapped, 0, sizeof(session.overlapped));
+session.overlapped.hEvent = wsaEvent;
+
+if (::WSARecv(clientSocket, &wsaBuf, 1, &recvLen, &flags, &session.overlapped, nullptr) == SOCKET_ERROR)
+{
+    if (::WSAGetLastError() == WSA_IO_PENDING)
+    {
+        ::WSAWaitForMultipleEvents(1, &wsaEvent, TRUE, WSA_INFINITE, FALSE);
+
+        if (::WSAGetOverlappedResult(session.socket, &session.overlapped, &recvLen, FALSE, &flags) == FALSE)
+            break;
+    }
+}</code></pre>
+
+  <p>
+    <code>WSA_IO_PENDING</code>은 실패가 아니라 “요청은 접수됐고 아직 완료되지 않았다”는 의미입니다.
+    이벤트 기반 방식에서는 완료 시 이벤트가 signaled 되고, <code>WSAGetOverlappedResult</code>로 실제 전송 바이트 수를 확인합니다.
+  </p>
+
+  <h2>콜백 기반 완료 루틴</h2>
+  <pre><code class="language-cpp">struct Session
+{
+    WSAOVERLAPPED overlapped = {};
+    SOCKET socket = INVALID_SOCKET;
+    char recvBuffer[BUFSIZE] = {};
+    int32 recvBytes = 0;
+    int32 sendBytes = 0;
+};
+
+void CALLBACK RecvCallback(
+    DWORD error,
+    DWORD recvLen,
+    LPWSAOVERLAPPED overlapped,
+    DWORD flags)
+{
+    cout &lt;&lt; "Data Recv Len Callback = " &lt;&lt; recvLen &lt;&lt; endl;
+
+    Session* session = (Session*)overlapped;
+}</code></pre>
+
+  <p>
+    최신 커밋에서는 <code>WSAOVERLAPPED</code>를 <code>Session</code>의 첫 번째 멤버로 옮겼습니다.
+    이렇게 하면 콜백에서 받은 <code>LPWSAOVERLAPPED</code> 주소가 곧 <code>Session</code> 객체의 시작 주소가 되므로,
+    실습 코드처럼 캐스팅해 세션을 복원할 수 있습니다. 실전 코드에서는 보통 <code>CONTAINING_RECORD</code> 같은 의도를 드러내는 방식이나
+    별도 컨텍스트 구조를 사용해 더 안전하게 표현합니다.
+  </p>
+
+  <h2>Alertable Wait</h2>
+  <pre><code class="language-cpp">if (::WSARecv(clientSocket, &wsaBuf, 1, &recvLen, &flags, &session.overlapped, RecvCallback) == SOCKET_ERROR)
+{
+    if (::WSAGetLastError() == WSA_IO_PENDING)
+    {
+        ::SleepEx(INFINITE, TRUE);
+    }
+}</code></pre>
+
+  <p>
+    완료 루틴 콜백은 요청한 스레드가 alertable wait 상태에 들어가야 호출됩니다.
+    <code>SleepEx</code>, <code>WaitForSingleObjectEx</code>, <code>WaitForMultipleObjectsEx</code>, <code>WSAWaitForMultipleEvents</code>의 alertable 옵션이 여기에 해당합니다.
+  </p>
+
+  <h2>모델 정리</h2>
+  <ul>
+    <li><code>select</code>, <code>WSAEventSelect</code>: 준비 상태를 감지한 뒤 <code>recv/send</code>를 호출합니다.</li>
+    <li>Overlapped 이벤트 기반: 비동기 작업을 요청하고 이벤트로 완료를 확인합니다.</li>
+    <li>Overlapped 콜백 기반: 비동기 작업 완료 시 운영체제가 완료 루틴을 호출합니다.</li>
+    <li>다음 학습 단계로 자연스러운 주제는 IOCP입니다.</li>
+  </ul>
+
+  <section class="sources">
+    <h2>참고 자료</h2>
+    <ul>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/winsock/overlapped-i-o-2">Microsoft Learn - Overlapped Input/Output</a></li>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsarecv">Microsoft Learn - WSARecv function</a></li>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsagetoverlappedresult">Microsoft Learn - WSAGetOverlappedResult function</a></li>
+    </ul>
+  </section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>

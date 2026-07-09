@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>TCP 바이트 스트림</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <p><a href="index.html">← index</a></p>
+  <h1>TCP 바이트 스트림</h1>
+  <p class="lead">관련 커밋: <code>8dafd70 tcp통신의 바이트스트림 확인</code></p>
+
+  <section class="concept">
+    <h2>개념 한눈에 보기</h2>
+    <p>
+      TCP는 메시지 큐가 아니라 신뢰성 있는 바이트 스트림입니다.
+      순서와 재전송은 TCP가 책임지지만, 애플리케이션이 호출한 <code>send</code>의 경계는 수신자의 <code>recv</code> 경계로 보존되지 않습니다.
+      그래서 게임 서버는 TCP 위에 별도의 패킷 프레이밍을 설계해야 합니다.
+    </p>
+  </section>
+
+  <section class="diagram">
+    <p class="diagram-title">send 경계와 recv 경계는 다를 수 있음</p>
+    <div>
+      <strong>Client send</strong>
+      <div class="stream">
+        <span class="byte">A:100B</span>
+        <span class="byte">B:100B</span>
+        <span class="byte">C:100B</span>
+        <span class="byte">D:100B</span>
+      </div>
+    </div>
+    <div style="margin-top: 14px;">
+      <strong>Server recv</strong>
+      <div class="stream">
+        <span class="byte recv">A+B:200B</span>
+        <span class="byte recv">C 일부:40B</span>
+        <span class="byte recv">C 나머지+D:160B</span>
+      </div>
+    </div>
+  </section>
+
+  <h2>무엇을 배웠나</h2>
+  <p>
+    이 커밋은 클라이언트가 짧은 시간에 여러 번 <code>send</code>를 호출하도록 바꿔 TCP가 메시지 단위가 아니라
+    바이트 스트림으로 동작한다는 점을 관찰합니다. 송신자가 <code>send</code>를 10번 호출해도 수신자는 반드시
+    <code>recv</code>를 10번 하게 되는 것이 아닙니다.
+  </p>
+
+  <h2>실습 코드</h2>
+  <pre><code class="language-cpp">char sendBuffer[100] = "Hello World!";
+
+for (int32 i = 0; i &lt; 10; i++)
+{
+    int32 resultCode = ::send(clientSocket, sendBuffer, sizeof(sendBuffer), 0);
+    if (resultCode == SOCKET_ERROR)
+    {
+        int32 errCode = ::WSAGetLastError();
+        cout &lt;&lt; "Socket ErrorCode : " &lt;&lt; errCode &lt;&lt; endl;
+        return 0;
+    }
+}
+
+cout &lt;&lt; "Send Data! Len = " &lt;&lt; sizeof(sendBuffer) &lt;&lt; endl;</code></pre>
+
+  <h2>왜 이런 일이 생기나</h2>
+  <p>
+    TCP는 신뢰성 있는 순서 보장 바이트 스트림입니다. 애플리케이션이 <code>send</code>를 호출한 단위는 TCP 프로토콜의
+    메시지 경계가 아닙니다. 네트워크 스택, 송신 버퍼, 수신 버퍼, Nagle 알고리즘, MSS, 수신 타이밍에 따라 여러 번 보낸
+    데이터가 하나의 <code>recv</code>로 합쳐질 수도 있고, 한 번 보낸 데이터가 여러 번의 <code>recv</code>로 나뉠 수도 있습니다.
+  </p>
+
+  <h2>서버 코드에서 보이는 관찰점</h2>
+  <pre><code class="language-cpp">char recvBuffer[1000];
+int32 recvLen = ::recv(clientSocket, recvBuffer, sizeof(recvBuffer), 0);
+
+cout &lt;&lt; "Recv Data! Len = " &lt;&lt; recvLen &lt;&lt; endl;</code></pre>
+
+  <p>
+    클라이언트는 100바이트 버퍼를 10번 보내지만, 서버의 <code>recvLen</code>은 실행 환경에 따라 100, 200, 1000처럼
+    달라질 수 있습니다. 그래서 게임 서버 프로토콜은 보통 패킷 헤더에 길이를 넣고, 수신 버퍼에서 완성된 패킷만 꺼내는
+    파싱 계층을 둡니다.
+  </p>
+
+  <h2>실전 설계 메모</h2>
+  <ul>
+    <li>TCP 위에서는 직접 패킷 경계를 설계해야 합니다.</li>
+    <li>대표 패턴은 <code>[패킷 길이][패킷 ID][payload]</code> 형태의 고정 헤더입니다.</li>
+    <li><code>recv</code> 한 번이 패킷 하나라는 가정은 버그의 시작점이 됩니다.</li>
+  </ul>
+
+  <section class="sources">
+    <h2>참고 자료</h2>
+    <ul>
+      <li><a href="https://www.rfc-editor.org/rfc/rfc9293">RFC 9293 - Transmission Control Protocol</a></li>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/winsock/complete-server-code">Microsoft Learn - Complete Winsock Server Code</a></li>
+    </ul>
+  </section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>

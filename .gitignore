@@ -52,5 +52,5 @@ Desktop.ini
 *.tmp
 
 # User
-document/
+#document/
 .codex/

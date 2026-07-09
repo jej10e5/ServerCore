@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>블로킹 에코 서버</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <p><a href="index.html">← index</a></p>
+  <h1>블로킹 에코 서버</h1>
+  <p class="lead">관련 커밋: <code>41694c9 에코 클라 / 에코 서버</code></p>
+
+  <section class="concept">
+    <h2>개념 한눈에 보기</h2>
+    <p>
+      블로킹 소켓은 호출 조건이 만족될 때까지 현재 스레드를 멈춥니다.
+      <code>accept</code>는 연결 요청이 올 때까지, <code>recv</code>는 읽을 데이터가 도착할 때까지 기다립니다.
+      에코 서버는 이 단순한 성질을 이용해 “받은 만큼 다시 보내는” 네트워크 왕복 구조를 확인하기 좋은 첫 실습입니다.
+    </p>
+  </section>
+
+  <section class="diagram">
+    <p class="diagram-title">에코 서버 왕복 구조</p>
+    <div class="swimlane">
+      <div class="lane client">Client</div>
+      <div class="lane network">send("Hello") → TCP → recv()</div>
+      <div class="lane server">Server</div>
+      <div class="lane client">recv()</div>
+      <div class="lane network">← TCP ← send(recvBuffer)</div>
+      <div class="lane server">echo</div>
+    </div>
+  </section>
+
+  <h2>무엇을 배웠나</h2>
+  <p>
+    연결만 하던 코드에 <code>send</code>와 <code>recv</code>를 추가해 에코 서버를 구성했습니다.
+    클라이언트가 문자열을 보내면 서버는 받은 바이트 수만큼 다시 보내고, 클라이언트는 그 응답을 읽습니다.
+  </p>
+
+  <h2>서버의 echo loop</h2>
+  <pre><code class="language-cpp">while (true)
+{
+    char recvBuffer[1000];
+
+    int32 recvLen = ::recv(clientSocket, recvBuffer, sizeof(recvBuffer), 0);
+    if (recvLen &lt;= 0)
+    {
+        int32 errCode = ::WSAGetLastError();
+        cout &lt;&lt; "Recv ErrorCode : " &lt;&lt; errCode &lt;&lt; endl;
+        return 0;
+    }
+
+    cout &lt;&lt; "Recv Data! Len = " &lt;&lt; recvLen &lt;&lt; endl;
+
+    int32 resultCode = ::send(clientSocket, recvBuffer, recvLen, 0);
+    if (resultCode == SOCKET_ERROR)
+    {
+        int32 errCode = ::WSAGetLastError();
+        cout &lt;&lt; "Send ErrorCode : " &lt;&lt; errCode &lt;&lt; endl;
+        return 0;
+    }
+}</code></pre>
+
+  <h2>클라이언트의 왕복 확인</h2>
+  <pre><code class="language-cpp">char sendBuffer[100] = "Hello World!";
+int32 resultCode = ::send(clientSocket, sendBuffer, sizeof(sendBuffer), 0);
+
+char recvBuffer[1000];
+int32 recvLen = ::recv(clientSocket, recvBuffer, sizeof(recvBuffer), 0);
+
+cout &lt;&lt; "Recv Data! Data = " &lt;&lt; recvBuffer &lt;&lt; endl;
+cout &lt;&lt; "Recv Data! Len = " &lt;&lt; recvLen &lt;&lt; endl;</code></pre>
+
+  <h2>블로킹 호출의 의미</h2>
+  <p>
+    이 코드에서는 기본 블로킹 소켓을 사용합니다. 따라서 <code>accept</code>는 접속할 클라이언트가 생길 때까지,
+    <code>recv</code>는 읽을 데이터가 도착할 때까지 현재 스레드를 멈춥니다.
+    구조가 단순해 학습에 좋지만, 한 스레드에서 여러 클라이언트를 자연스럽게 처리하기 어렵습니다.
+  </p>
+
+  <h2>개선 포인트</h2>
+  <ul>
+    <li><code>recvLen == 0</code>은 상대가 정상 종료한 상황이므로 오류와 구분하는 편이 좋습니다.</li>
+    <li><code>send</code>는 요청한 길이보다 적게 보낼 수 있으므로 실전에서는 누적 전송 루프가 필요합니다.</li>
+    <li>문자열 출력 시 받은 데이터가 null-terminated라는 보장이 없으므로 길이 기반으로 다루는 습관이 안전합니다.</li>
+  </ul>
+
+  <section class="sources">
+    <h2>참고 자료</h2>
+    <ul>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/winsock/complete-server-code">Microsoft Learn - Complete Winsock Server Code</a></li>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/winsock/complete-client-code">Microsoft Learn - Complete Winsock Client Code</a></li>
+    </ul>
+  </section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>소켓 옵션과 종료</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <p><a href="index.html">← index</a></p>
+  <h1>소켓 옵션과 종료</h1>
+  <p class="lead">관련 커밋: <code>526bb81 소켓 옵션</code></p>
+
+  <section class="concept">
+    <h2>개념 한눈에 보기</h2>
+    <p>
+      소켓 옵션은 “데이터를 어떻게 보낼까”가 아니라 “이 소켓을 어떤 정책으로 운용할까”를 정하는 장치입니다.
+      <code>SO_KEEPALIVE</code>는 유휴 연결 감지, <code>SO_LINGER</code>는 닫을 때 남은 송신 데이터를 어떻게 다룰지,
+      <code>shutdown</code>은 연결의 한 방향 또는 양방향 종료 의사를 표현합니다.
+    </p>
+  </section>
+
+  <section class="diagram">
+    <p class="diagram-title">종료 관련 선택지</p>
+    <div class="state-grid">
+      <div class="state"><strong>shutdown(SD_SEND)</strong>더 이상 보내지 않겠다는 half-close 신호</div>
+      <div class="state"><strong>SO_LINGER on</strong>close 시 남은 송신 데이터를 보내기 위해 일정 시간 대기</div>
+      <div class="state"><strong>closesocket</strong>프로세스가 가진 소켓 핸들 해제</div>
+      <div class="state"><strong>SO_KEEPALIVE</strong>조용히 죽은 연결을 TCP keep-alive로 감지</div>
+    </div>
+  </section>
+
+  <h2>무엇을 배웠나</h2>
+  <p>
+    이 커밋은 데이터 송수신 자체보다 소켓의 동작 정책을 조절하는 옵션에 초점을 둡니다.
+    <code>setsockopt</code>로 keepalive와 linger를 설정하고, <code>shutdown</code>과 <code>closesocket</code>의 역할 차이를 확인합니다.
+  </p>
+
+  <h2>SO_KEEPALIVE</h2>
+  <pre><code class="language-cpp">bool enable = true;
+::setsockopt(serverSocket, SOL_SOCKET, SO_KEEPALIVE, (char*)&enable, sizeof(enable));</code></pre>
+  <p>
+    <code>SO_KEEPALIVE</code>는 TCP 연결이 조용히 끊어진 경우를 감지하기 위한 옵션입니다.
+    상대 프로세스가 죽거나 네트워크가 사라졌는데 FIN/RST를 받지 못하면 연결이 살아 있는 것처럼 보일 수 있습니다.
+    keepalive는 운영체제가 주기적으로 확인 패킷을 보내 끊어진 연결을 감지하게 합니다.
+  </p>
+
+  <h2>SO_LINGER</h2>
+  <pre><code class="language-cpp">LINGER linger;
+linger.l_onoff = 1;
+linger.l_linger = 5;
+::setsockopt(serverSocket, SOL_SOCKET, SO_LINGER, (char*)&linger, sizeof(linger));</code></pre>
+  <p>
+    <code>SO_LINGER</code>는 <code>closesocket</code> 시점에 송신 버퍼에 남은 데이터를 어떻게 처리할지 정합니다.
+    linger를 켜고 시간을 지정하면, 닫기 전에 남은 데이터를 보내기 위해 일정 시간 기다릴 수 있습니다.
+    반대로 상황에 따라 빠르게 닫는 정책이 더 적절할 수도 있습니다.
+  </p>
+
+  <h2>shutdown과 closesocket</h2>
+  <pre><code class="language-cpp">// Half-Close
+// SD_SEND    : 더 이상 send하지 않겠다고 알림
+// SD_RECEIVE : recv 방향 종료
+// SD_BOTH    : 양방향 종료
+::shutdown(serverSocket, SD_SEND);
+
+::closesocket(serverSocket);</code></pre>
+
+  <p>
+    <code>shutdown</code>은 연결의 송신 또는 수신 방향을 먼저 닫는 프로토콜 수준의 의사 표현입니다.
+    <code>closesocket</code>은 프로세스가 가진 소켓 핸들을 반환합니다.
+    실전 서버에서는 “더 보낼 데이터가 없다”와 “리소스를 해제한다”를 분리해서 생각해야 종료 흐름이 명확해집니다.
+  </p>
+
+  <h2>레벨 선택</h2>
+  <ul>
+    <li><code>SOL_SOCKET</code>: 소켓 공통 옵션.</li>
+    <li><code>IPPROTO_IP</code>: IPv4 계층 옵션.</li>
+    <li><code>IPPROTO_TCP</code>: TCP 계층 옵션.</li>
+  </ul>
+
+  <section class="sources">
+    <h2>참고 자료</h2>
+    <ul>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/winsock/sol-socket-socket-options">Microsoft Learn - SOL_SOCKET Socket Options</a></li>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-setsockopt">Microsoft Learn - setsockopt function</a></li>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-shutdown">Microsoft Learn - shutdown function</a></li>
+      <li><a href="https://learn.microsoft.com/en-us/windows/win32/winsock/graceful-shutdown-linger-options-and-socket-closure-2">Microsoft Learn - Graceful Shutdown, Linger Options, and Socket Closure</a></li>
+    </ul>
+  </section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>

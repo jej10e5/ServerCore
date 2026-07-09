@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>IOCP Accept 마인드맵</title>
+  <style>
+    body {
+      margin: 0;
+      color: #1f2937;
+      background: #f5f7fb;
+      font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 34px 24px 56px;
+    }
+
+    a {
+      color: #0959aa;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    h1 {
+      margin: 12px 0 8px;
+      font-size: 32px;
+    }
+
+    .lead {
+      max-width: 920px;
+      margin: 0 0 24px;
+      color: #4b5563;
+      font-size: 17px;
+    }
+
+    .mindmap {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1fr minmax(240px, 320px) 1fr;
+      gap: 26px;
+      align-items: center;
+      min-height: 720px;
+      padding: 26px;
+      border: 1px solid #d8dee4;
+      border-radius: 8px;
+      background: #ffffff;
+      overflow: hidden;
+    }
+
+    .center {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      min-height: 220px;
+      flex-direction: column;
+      justify-content: center;
+      gap: 10px;
+      padding: 24px;
+      border: 2px solid #2563eb;
+      border-radius: 8px;
+      background: #eff6ff;
+      text-align: center;
+      box-shadow: 0 18px 34px rgba(37, 99, 235, 0.16);
+    }
+
+    .center strong {
+      color: #1e3a8a;
+      font-size: 26px;
+    }
+
+    .center span {
+      color: #334155;
+      font-weight: 600;
+    }
+
+    .branch-column {
+      display: grid;
+      gap: 18px;
+    }
+
+    .branch {
+      position: relative;
+      z-index: 2;
+      padding: 16px 18px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .branch h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    .branch ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .branch li {
+      margin: 6px 0;
+    }
+
+    code {
+      border-radius: 4px;
+      background: #e5e7eb;
+      padding: 2px 5px;
+      font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+      font-size: 0.95em;
+    }
+
+    .setup {
+      border-left: 5px solid #0ea5e9;
+    }
+
+    .object {
+      border-left: 5px solid #22c55e;
+    }
+
+    .event {
+      border-left: 5px solid #f59e0b;
+    }
+
+    .worker {
+      border-left: 5px solid #8b5cf6;
+    }
+
+    .accept {
+      border-left: 5px solid #ef4444;
+    }
+
+    .debug {
+      border-left: 5px solid #64748b;
+    }
+
+    .line-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .mini-flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .step {
+      padding: 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #ffffff;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .step span {
+      display: block;
+      margin-top: 4px;
+      color: #64748b;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .note {
+      margin-top: 18px;
+      padding: 16px 18px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .note h2 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    .note p {
+      margin: 0;
+    }
+
+    @media (max-width: 920px) {
+      .mindmap {
+        grid-template-columns: 1fr;
+        min-height: auto;
+      }
+
+      .line-layer {
+        display: none;
+      }
+
+      .mini-flow {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <p><a href="index.html">Index</a> / <a href="iocp-overview.html">IOCP Overview</a></p>
+  <h1>IOCP Accept 마인드맵</h1>
+  <p class="lead">
+    중심은 <code>IOCP</code>다. 소켓 작업의 완료 통지를 한곳에 모으고,
+    worker thread가 꺼내서 completion key에 담긴 객체의 <code>Dispatch</code>로 넘긴다.
+  </p>
+
+  <section class="mindmap">
+    <svg class="line-layer" viewBox="0 0 1200 720" preserveAspectRatio="none" aria-hidden="true">
+      <path d="M 600 360 C 460 280, 370 135, 235 105" fill="none" stroke="#93c5fd" stroke-width="4"/>
+      <path d="M 600 360 C 455 335, 365 290, 235 280" fill="none" stroke="#86efac" stroke-width="4"/>
+      <path d="M 600 360 C 455 435, 365 585, 235 610" fill="none" stroke="#fbbf24" stroke-width="4"/>
+      <path d="M 600 360 C 745 280, 835 135, 965 105" fill="none" stroke="#c4b5fd" stroke-width="4"/>
+      <path d="M 600 360 C 750 360, 840 360, 965 360" fill="none" stroke="#fca5a5" stroke-width="4"/>
+      <path d="M 600 360 C 745 455, 835 585, 965 610" fill="none" stroke="#94a3b8" stroke-width="4"/>
+    </svg>
+
+    <div class="branch-column">
+      <article class="branch setup">
+        <h2>1. 준비 단계</h2>
+        <ul>
+          <li><code>SocketUtils::Init</code></li>
+          <li><code>WSAStartup</code></li>
+          <li><code>AcceptEx</code> 함수 포인터 로딩</li>
+          <li><code>IocpCore</code>가 완료 큐 생성</li>
+        </ul>
+      </article>
+
+      <article class="branch object">
+        <h2>2. 등록 대상</h2>
+        <ul>
+          <li><code>Listener</code>는 <code>IocpObject</code></li>
+          <li><code>GetHandle()</code>로 listen socket 반환</li>
+          <li><code>Register(this)</code>로 IOCP에 연결</li>
+          <li>completion key = <code>Listener*</code></li>
+        </ul>
+      </article>
+
+      <article class="branch event">
+        <h2>3. 이벤트 객체</h2>
+        <ul>
+          <li><code>IocpEvent : OVERLAPPED</code></li>
+          <li><code>AcceptEvent : IocpEvent</code></li>
+          <li><code>AcceptEvent</code> 안에 <code>Session*</code></li>
+          <li>완료 후 어떤 작업인지 <code>EventType</code>으로 구분</li>
+        </ul>
+      </article>
+    </div>
+
+    <div class="center">
+      <strong>IOCP</strong>
+      <span>완료 통지 허브</span>
+      <span><code>GetQueuedCompletionStatus</code></span>
+      <span>완료된 작업을 worker에게 전달</span>
+    </div>
+
+    <div class="branch-column">
+      <article class="branch worker">
+        <h2>4. Worker Thread</h2>
+        <ul>
+          <li><code>GIocpCore.Dispatch()</code> 반복</li>
+          <li>큐에 완료 이벤트가 올 때까지 대기</li>
+          <li><code>numOfBytes</code> 수신</li>
+          <li><code>iocpObject</code>, <code>iocpEvent</code> 수신</li>
+        </ul>
+      </article>
+
+      <article class="branch accept">
+        <h2>5. Accept 완료</h2>
+        <ul>
+          <li><code>iocpObject-&gt;Dispatch(...)</code></li>
+          <li>실제 호출은 <code>Listener::Dispatch</code></li>
+          <li><code>AcceptEvent</code>로 캐스팅</li>
+          <li><code>ProcessAccept</code>에서 연결 마무리</li>
+        </ul>
+      </article>
+
+      <article class="branch debug">
+        <h2>6. 안 내려올 때</h2>
+        <ul>
+          <li><code>bind</code> 성공?</li>
+          <li><code>listen</code> 성공?</li>
+          <li><code>AcceptEx</code> 호출됨?</li>
+          <li><code>WSA_IO_PENDING</code>이면 정상 대기</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section class="mini-flow" aria-label="IOCP accept 핵심 순서">
+    <div class="step">StartAccept<span>문 열기</span></div>
+    <div class="step">RegisterAccept<span>AcceptEx 걸기</span></div>
+    <div class="step">IOCP Queue<span>완료 통지 도착</span></div>
+    <div class="step">Dispatch<span>담당 객체로 전달</span></div>
+    <div class="step">ProcessAccept<span>연결 후처리</span></div>
+  </section>
+
+  <section class="note">
+    <h2>기억 포인트</h2>
+    <p>
+      <code>Listener</code>가 IOCP에 등록된 객체이고, <code>AcceptEvent</code>가 완료 시 되돌아오는 작업 표식이다.
+      그래서 IOCP 큐에서 꺼낸 두 포인터를 합치면 "누가 처리할지"와 "무슨 작업인지"가 모두 복원된다.
+    </p>
+  </section>
+</main>
+</body>
+</html>

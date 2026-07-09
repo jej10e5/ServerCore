@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>IOCP Accept 흐름 Overview</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <p><a href="index.html">Index</a></p>
+  <h1>IOCP Accept 흐름 Overview</h1>
+  <p class="lead">
+    2026-07-08 학습 기록. 이번 단계에서는 Overlapped I/O에서 한 단계 더 나아가,
+    완료 통지를 IOCP 큐로 모으고 worker thread가 꺼내 처리하는 전체 흐름을 정리한다.
+    핵심은 "작업을 먼저 걸어두고, 완료되면 IOCP가 알려주고, 완료 이벤트에 담긴 타입으로 실제 처리 함수를 찾아간다"는 구조다.
+  </p>
+
+  <section class="concept">
+    <h2>한 문장으로 보기</h2>
+    <p>
+      <code>Listener</code>가 listen socket을 만들고 IOCP에 등록한 뒤 <code>AcceptEx</code>를 미리 걸어둔다.
+      클라이언트가 접속하면 Windows 커널이 accept 완료 이벤트를 IOCP 큐에 넣고,
+      worker thread가 <code>GetQueuedCompletionStatus</code>로 꺼낸 다음
+      completion key에 들어 있던 <code>IocpObject</code>의 <code>Dispatch</code>를 호출한다.
+    </p>
+  </section>
+
+  <section class="diagram">
+    <p class="diagram-title">전체 accept 처리 흐름</p>
+    <div class="flow flow-wide">
+      <span class="node server">GameServer main</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node">Listener::StartAccept</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node">GIocpCore.Register</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node">bind / listen</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node warn">RegisterAccept</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node warn">AcceptEx pending</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node server">IOCP queue</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node">IocpCore::Dispatch</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node">Listener::Dispatch</span>
+      <span class="arrow">-&gt;</span>
+      <span class="node">ProcessAccept</span>
+    </div>
+  </section>
+
+  <h2>초기화 단계</h2>
+  <p>
+    프로그램이 시작되면 전역 객체 초기화 과정에서 <code>SocketUtils::Init</code>이 호출된다.
+    여기서 <code>WSAStartup</code>으로 Winsock을 초기화하고, <code>WSAIoctl</code>을 통해
+    <code>ConnectEx</code>, <code>DisconnectEx</code>, <code>AcceptEx</code> 함수 포인터를 얻는다.
+    이 함수들은 일반 함수처럼 바로 링크되는 API가 아니라, 실행 중에 소켓을 통해 주소를 얻어와 사용하는 확장 함수다.
+  </p>
+
+  <pre><code class="language-cpp">void SocketUtils::Init()
+{
+    WSADATA wsaData;
+    ASSERT_CRASH(::WSAStartup(MAKEWORD(2, 2), OUT &amp;wsaData) == 0);
+
+    SOCKET dummySocket = CreateSocket();
+    ASSERT_CRASH(BindWindowsFunction(dummySocket, WSAID_CONNECTEX, reinterpret_cast&lt;LPVOID*&gt;(&amp;ConnectEx)));
+    ASSERT_CRASH(BindWindowsFunction(dummySocket, WSAID_DISCONNECTEX, reinterpret_cast&lt;LPVOID*&gt;(&amp;DisconnectEx)));
+    ASSERT_CRASH(BindWindowsFunction(dummySocket, WSAID_ACCEPTEX, reinterpret_cast&lt;LPVOID*&gt;(&amp;AcceptEx)));
+    Close(dummySocket);
+}</code></pre>
+
+  <h2>IOCP 등록의 의미</h2>
+  <p>
+    <code>IocpCore</code>는 내부에 IOCP handle 하나를 가지고 있다. 처음 생성할 때는
+    <code>CreateIoCompletionPort(INVALID_HANDLE_VALUE, ...)</code>로 "완료 큐" 자체를 만든다.
+    이후 <code>Register</code>를 호출하면 특정 socket handle을 이 완료 큐에 연결한다.
+  </p>
+  <p>
+    중요한 부분은 세 번째 인자인 completion key다. 현재 코드는 completion key에
+    <code>IocpObject*</code>를 넣는다. 그래서 나중에 완료 통지를 꺼낼 때
+    "이 완료 이벤트는 어떤 객체에게 보내야 하는가?"를 바로 알 수 있다.
+  </p>
+
+  <pre><code class="language-cpp">bool IocpCore::Register(IocpObject* iocpObject)
+{
+    return ::CreateIoCompletionPort(
+        iocpObject-&gt;GetHandle(),
+        _iocpHandle,
+        reinterpret_cast&lt;ULONG_PTR&gt;(iocpObject),
+        0);
+}</code></pre>
+
+  <section class="diagram">
+    <p class="diagram-title">IOCP handle과 completion key</p>
+    <div class="relationship">
+      <div class="box">
+        <strong>Listener</strong>
+        <span>listen socket 보유</span>
+        <span>IocpObject 구현</span>
+      </div>
+      <div class="connector">socket handle 등록<br>completion key = Listener*</div>
+      <div class="box highlight">
+        <strong>IocpCore</strong>
+        <span>IOCP handle 보유</span>
+        <span>완료 큐에서 이벤트 꺼냄</span>
+      </div>
+      <div class="connector">완료 시 반환<br>iocpObject = Listener*</div>
+      <div class="box">
+        <strong>Listener::Dispatch</strong>
+        <span>AcceptEvent 처리</span>
+        <span>ProcessAccept 호출</span>
+      </div>
+    </div>
+  </section>
+
+  <h2>Listener::StartAccept</h2>
+  <p>
+    <code>Listener</code>는 서버의 입구 역할을 한다. listen socket을 만들고,
+    IOCP에 listen socket을 등록한 뒤, 주소 재사용 옵션과 linger 옵션을 설정한다.
+    그 다음 <code>bind</code>로 IP/PORT를 소켓에 묶고 <code>listen</code>으로 접속 대기 상태에 들어간다.
+  </p>
+  <p>
+    여기까지는 "서버 문을 열었다"에 가깝고, 아직 IOCP 이벤트가 발생할 작업은 없다.
+    IOCP에 완료 이벤트가 들어오려면 반드시 <code>AcceptEx</code>, <code>WSARecv</code>,
+    <code>WSASend</code> 같은 Overlapped 작업을 먼저 걸어야 한다.
+  </p>
+
+  <pre><code class="language-cpp">bool Listener::StartAccept(NetAddress netAddress)
+{
+    _socket = SocketUtils::CreateSocket();
+    if (_socket == INVALID_SOCKET)
+        return false;
+
+    if (GIocpCore.Register(this) == false)
+        return false;
+
+    if (SocketUtils::SetReuseAddress(_socket, true) == false)
+        return false;
+
+    if (SocketUtils::SetLinger(_socket, 0, 0) == false)
+        return false;
+
+    if (SocketUtils::Bind(_socket, netAddress) == false)
+        return false;
+
+    if (SocketUtils::Listen(_socket) == false)
+        return false;
+
+    AcceptEvent* acceptEvent = xnew&lt;AcceptEvent&gt;();
+    _acceptEvents.push_back(acceptEvent);
+    RegisterAccept(acceptEvent);
+
+    return true;
+}</code></pre>
+
+  <section class="concept">
+    <h2>디버깅 체크 포인트</h2>
+    <p>
+      <code>IocpCore::Dispatch</code>의 <code>iocpObject-&gt;Dispatch(...)</code>까지 내려오지 않는다면,
+      대부분 그 전 단계에서 완료 이벤트가 만들어지지 않은 것이다.
+      <code>bind</code>, <code>listen</code>, <code>AcceptEx</code>가 성공했는지와
+      <code>AcceptEx</code> 실패 시 에러가 <code>WSA_IO_PENDING</code>인지 먼저 확인한다.
+      <code>WSA_IO_PENDING</code>은 실패가 아니라 "작업이 정상 등록되었고 아직 완료되지 않았다"는 뜻이다.
+    </p>
+  </section>
+
+  <h2>AcceptEvent와 Session</h2>
+  <p>
+    <code>AcceptEvent</code>는 <code>IocpEvent</code>를 상속하고, 내부에 새로 연결될
+    <code>Session*</code>을 들고 있다. <code>IocpEvent</code>는 다시 <code>OVERLAPPED</code>를 상속한다.
+    따라서 <code>AcceptEx</code>에 <code>AcceptEvent*</code>를 <code>LPOVERLAPPED</code>로 넘길 수 있고,
+    완료 후 <code>GetQueuedCompletionStatus</code>에서 다시 <code>IocpEvent*</code>로 받을 수 있다.
+  </p>
+
+  <section class="diagram">
+    <p class="diagram-title">클래스 관계도</p>
+    <div class="class-map">
+      <div class="class-card">
+        <strong>IocpObject</strong>
+        <span>GetHandle()</span>
+        <span>Dispatch(event, bytes)</span>
+      </div>
+      <div class="class-arrow">상속</div>
+      <div class="class-card">
+        <strong>Listener</strong>
+        <span>listen socket</span>
+        <span>AcceptEvent 목록</span>
+        <span>Accept 완료 처리</span>
+      </div>
+      <div class="class-card">
+        <strong>Session</strong>
+        <span>client socket</span>
+        <span>recv buffer</span>
+        <span>클라이언트 주소</span>
+      </div>
+      <div class="class-arrow">연결 대상</div>
+      <div class="class-card">
+        <strong>AcceptEvent</strong>
+        <span>IocpEvent 상속</span>
+        <span>Session* 보관</span>
+      </div>
+      <div class="class-arrow">상속</div>
+      <div class="class-card">
+        <strong>IocpEvent</strong>
+        <span>OVERLAPPED 상속</span>
+        <span>EventType 보관</span>
+      </div>
+    </div>
+  </section>
+
+  <pre><code class="language-cpp">class IocpEvent : public OVERLAPPED
+{
+public:
+    IocpEvent(EventType type);
+    void Init();
+    EventType GetType() { return _type; }
+
+protected:
+    EventType _type;
+};
+
+class AcceptEvent : public IocpEvent
+{
+public:
+    AcceptEvent() : IocpEvent(EventType::Accept) {}
+
+    void SetSession(Session* session) { _session = session; }
+    Session* GetSession() { return _session; }
+
+private:
+    Session* _session = nullptr;
+};</code></pre>
+
+  <h2>RegisterAccept</h2>
+  <p>
+    <code>RegisterAccept</code>는 "다음 클라이언트 한 명을 받을 준비"를 하는 함수다.
+    새 <code>Session</code>을 만들고, 그 session의 client socket을 <code>AcceptEx</code>에 넘긴다.
+    listen socket은 이미 IOCP에 등록되어 있으므로, 이 accept 작업이 완료되면 완료 통지는 같은 IOCP 큐로 들어온다.
+  </p>
+
+  <pre><code class="language-cpp">void Listener::RegisterAccept(AcceptEvent* acceptEvent)
+{
+    Session* session = xnew&lt;Session&gt;();
+
+    acceptEvent-&gt;Init();
+    acceptEvent-&gt;SetSession(session);
+
+    DWORD bytesReceived = 0;
+    if (false == SocketUtils::AcceptEx(
+        _socket,
+        session-&gt;GetSocket(),
+        session-&gt;_recvBuffer,
+        0,
+        sizeof(SOCKADDR_IN) + 16,
+        sizeof(SOCKADDR_IN) + 16,
+        OUT &amp;bytesReceived,
+        static_cast&lt;LPOVERLAPPED&gt;(acceptEvent)))
+    {
+        const int32 errCode = WSAGetLastError();
+        if (errCode != WSA_IO_PENDING)
+        {
+            RegisterAccept(acceptEvent);
+        }
+    }
+}</code></pre>
+
+  <h2>Worker thread와 Dispatch</h2>
+  <p>
+    <code>GameServer</code>는 여러 worker thread를 만들고 각 thread에서 계속
+    <code>GIocpCore.Dispatch()</code>를 호출한다. 이 함수는 내부적으로
+    <code>GetQueuedCompletionStatus</code>에서 대기한다. 큐에 완료 이벤트가 없으면 기다리고,
+    완료 이벤트가 들어오면 세 가지 정보를 받는다.
+  </p>
+  <ul>
+    <li><code>numOfBytes</code>: 완료된 작업의 바이트 수</li>
+    <li><code>iocpObject</code>: 등록 시 completion key로 넣어둔 객체 포인터</li>
+    <li><code>iocpEvent</code>: Overlapped 포인터, 현재 구조에서는 <code>IocpEvent*</code>로 해석</li>
+  </ul>
+
+  <pre><code class="language-cpp">bool IocpCore::Dispatch(uint32 timeoutMs)
+{
+    DWORD numOfBytes = 0;
+    IocpObject* iocpObject = nullptr;
+    IocpEvent* iocpEvent = nullptr;
+
+    if (::GetQueuedCompletionStatus(
+        _iocpHandle,
+        OUT &amp;numOfBytes,
+        OUT reinterpret_cast&lt;PULONG_PTR&gt;(&amp;iocpObject),
+        OUT reinterpret_cast&lt;LPOVERLAPPED*&gt;(&amp;iocpEvent),
+        timeoutMs))
+    {
+        iocpObject-&gt;Dispatch(iocpEvent, numOfBytes);
+    }
+
+    return true;
+}</code></pre>
+
+  <h2>왜 Listener::Dispatch로 가는가</h2>
+  <p>
+    listen socket을 IOCP에 등록할 때 completion key에 <code>this</code>, 즉
+    <code>Listener*</code>를 넣었다. 그래서 accept 완료 이벤트를 꺼내면
+    <code>iocpObject</code>는 <code>Listener</code>가 된다.
+    <code>IocpCore</code>는 구체적인 타입을 몰라도 <code>IocpObject</code> 인터페이스만 보고
+    <code>Dispatch</code>를 호출할 수 있다.
+  </p>
+
+  <pre><code class="language-cpp">void Listener::Dispatch(IocpEvent* iocpEvent, int32 numOfBytes)
+{
+    ASSERT_CRASH(iocpEvent-&gt;GetType() == EventType::Accept);
+
+    AcceptEvent* acceptEvent = static_cast&lt;AcceptEvent*&gt;(iocpEvent);
+    ProcessAccept(acceptEvent);
+}</code></pre>
+
+  <h2>ProcessAccept</h2>
+  <p>
+    <code>ProcessAccept</code>는 accept가 끝난 뒤 실제 연결을 완성하는 단계다.
+    먼저 <code>SO_UPDATE_ACCEPT_CONTEXT</code>로 accept된 client socket에 listen socket의 컨텍스트를 연결한다.
+    그 다음 <code>getpeername</code>으로 클라이언트 주소를 얻고, <code>Session</code>에 저장한다.
+    마지막으로 다시 <code>RegisterAccept</code>를 호출해서 다음 클라이언트 접속을 받을 준비를 한다.
+  </p>
+
+  <pre><code class="language-cpp">void Listener::ProcessAccept(AcceptEvent* acceptEvent)
+{
+    Session* session = acceptEvent-&gt;GetSession();
+    if (false == SocketUtils::SetUpdateAcceptSocket(session-&gt;GetSocket(), _socket))
+    {
+        RegisterAccept(acceptEvent);
+        return;
+    }
+
+    SOCKADDR_IN sockAddress;
+    int32 sizeOfSockAddr = sizeof(sockAddress);
+    if (SOCKET_ERROR == ::getpeername(session-&gt;GetSocket(), OUT reinterpret_cast&lt;SOCKADDR*&gt;(&amp;sockAddress), &amp;sizeOfSockAddr))
+    {
+        RegisterAccept(acceptEvent);
+        return;
+    }
+
+    session-&gt;SetNetAddress(NetAddress(sockAddress));
+
+    cout &lt;&lt; "Client Connected!" &lt;&lt; endl;
+
+    RegisterAccept(acceptEvent);
+}</code></pre>
+
+  <h2>흐름을 따라 읽는 순서</h2>
+  <ol>
+    <li><code>CoreGlobal</code>에서 Winsock과 확장 함수 포인터를 초기화한다.</li>
+    <li><code>GameServer::main</code>에서 <code>Listener::StartAccept</code>를 호출한다.</li>
+    <li><code>Listener</code>가 listen socket을 만들고 IOCP에 등록한다.</li>
+    <li><code>bind</code>, <code>listen</code> 후 <code>AcceptEx</code>를 걸어둔다.</li>
+    <li>클라이언트가 접속하면 accept 작업이 완료되고 IOCP 큐에 완료 이벤트가 들어간다.</li>
+    <li>worker thread가 <code>IocpCore::Dispatch</code>에서 완료 이벤트를 꺼낸다.</li>
+    <li>completion key로 받은 <code>IocpObject*</code>를 통해 <code>Listener::Dispatch</code>가 호출된다.</li>
+    <li><code>AcceptEvent</code>를 꺼내 <code>ProcessAccept</code>에서 연결 후처리를 한다.</li>
+    <li>다시 <code>RegisterAccept</code>를 호출해 다음 접속을 받을 준비를 한다.</li>
+  </ol>
+
+  <section class="sources">
+    <h2>오늘의 핵심 정리</h2>
+    <ul>
+      <li>IOCP는 socket에서 발생한 Overlapped 작업 완료를 한 큐로 모아준다.</li>
+      <li><code>CreateIoCompletionPort</code>의 completion key 덕분에 완료 이벤트를 어떤 객체가 처리해야 하는지 알 수 있다.</li>
+      <li><code>AcceptEx</code>는 먼저 걸어두는 작업이고, <code>WSA_IO_PENDING</code>은 정상적인 대기 상태다.</li>
+      <li><code>IocpEvent</code>가 <code>OVERLAPPED</code>를 상속하므로 완료 시 이벤트 객체를 다시 복원할 수 있다.</li>
+      <li><code>Listener</code>는 accept 완료를 처리한 뒤 곧바로 다음 accept를 다시 걸어 서버가 계속 접속을 받을 수 있게 한다.</li>
+    </ul>
+  </section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>
