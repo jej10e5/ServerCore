@@ -6,7 +6,7 @@
 	Session
 ----------------------*/
 
-Session::Session()
+Session::Session() : _recvBuffer(BUFFER_SIZE)
 {
 	_socket = SocketUtils::CreateSocket();
 }
@@ -140,8 +140,8 @@ void Session::RegisterRecv()
 	// WSARecv 걸어 주기 전에 REF 증가 시키기
 
 	WSABUF wsabuf;
-	wsabuf.buf = reinterpret_cast<char*>(_recvBuffer);
-	wsabuf.len = len32(_recvBuffer);
+	wsabuf.buf = reinterpret_cast<char*>(_recvBuffer.WritePos());
+	wsabuf.len = _recvBuffer.FreeSize();
 	
 	DWORD numOfBytes = 0;
 	DWORD flags = 0;
@@ -209,8 +209,22 @@ void Session::ProcessRecv(int32 numOfBytes)
 		return;
 	}
 
-	// 컨텐츠 코드에서 재정의
-	OnRecv(_recvBuffer, numOfBytes);
+	if (_recvBuffer.OnWrite(numOfBytes) == false)
+	{
+		Disconnect(L"OnWrite Overflow");
+		return;
+	}
+
+	int32 dataSize = _recvBuffer.DataSize();
+	int32 processLen = OnRecv(_recvBuffer.ReadPos(), dataSize); // 컨텐츠 코드에서 재정의
+	if (processLen < 0 || dataSize < processLen || _recvBuffer.OnRead(processLen) == false)
+	{
+		Disconnect(L"OnRead Overflow");
+		return;
+	}
+
+	// 커서 정리
+	_recvBuffer.Clean();
 
 	// 수신 등록
 	RegisterRecv();
