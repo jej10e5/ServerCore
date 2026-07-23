@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SendBuffer Git 비교 분석</title>
+  <style>
+    :root { --bg:#0b1020; --panel:#141b2f; --panel2:#10172a; --text:#e8edf8; --muted:#9eabc3; --line:#2a3653; --blue:#64a9ff; --green:#55d6a5; --amber:#ffc766; --red:#ff7b86; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(160deg,#0b1020,#10172a 58%,#0a1220); color:var(--text); font:15px/1.65 "Segoe UI","Malgun Gothic",sans-serif; }
+    main { max-width:1120px; margin:auto; padding:48px 24px 80px; }
+    h1 { margin:0 0 8px; font-size:34px; letter-spacing:-1px; }
+    h2 { margin:42px 0 14px; font-size:22px; }
+    h3 { margin:0 0 8px; font-size:17px; }
+    p { margin:7px 0; }
+    code { padding:2px 6px; border-radius:5px; background:#0a1121; color:#b9d8ff; font-family:Consolas,monospace; }
+    .sub { color:var(--muted); }
+    .hero,.card,.flow,.callout { border:1px solid var(--line); background:rgba(20,27,47,.92); border-radius:14px; }
+    .hero { padding:25px 28px; box-shadow:0 14px 38px #0005; }
+    .badge { display:inline-block; margin:8px 7px 0 0; padding:4px 9px; border-radius:999px; background:#1d2944; color:#bfd8ff; font-size:12px; }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+    .card { padding:19px; }
+    .metric { font-size:28px; font-weight:700; color:var(--blue); }
+    .beforeafter { display:grid; grid-template-columns:1fr 48px 1fr; align-items:stretch; gap:10px; }
+    .arrow { display:grid; place-items:center; color:var(--blue); font-size:28px; }
+    .flow { padding:18px; background:var(--panel2); }
+    .step { padding:10px 12px; margin:7px 0; border-left:3px solid var(--blue); background:#141d34; border-radius:4px 9px 9px 4px; }
+    table { width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px; background:var(--panel); }
+    th,td { text-align:left; vertical-align:top; padding:11px 13px; border-bottom:1px solid var(--line); }
+    th { color:#bdd2ef; background:#18223a; }
+    tr:last-child td { border-bottom:0; }
+    .good { color:var(--green); } .warn { color:var(--amber); } .risk { color:var(--red); }
+    .callout { padding:15px 18px; margin:10px 0; }
+    .callout.warn { border-left:4px solid var(--amber); }
+    .callout.risk { border-left:4px solid var(--red); }
+    .memory-wrap { position:relative; padding:26px 0 48px; }
+    .memory-box { display:flex; min-height:92px; overflow:hidden; border:3px solid #7185aa; border-radius:12px; background:#0a1121; box-shadow:inset 0 0 24px #0007; }
+    .memory-cell { display:grid; place-items:center; padding:10px; text-align:center; font-weight:700; border-right:2px solid #0b1020; }
+    .memory-cell small { display:block; margin-top:3px; color:#d7e5fa; font-weight:400; }
+    .packet-a { flex:18; background:#245b86; } .packet-b { flex:28; background:#28765f; } .packet-c { flex:15; background:#745c2d; }
+    .memory-free { flex:39; color:var(--muted); background:repeating-linear-gradient(135deg,#17243d,#17243d 12px,#1b2944 12px,#1b2944 24px); }
+    .used-marker { position:absolute; left:61%; bottom:2px; transform:translateX(-50%); color:var(--amber); text-align:center; font:14px Consolas,monospace; }
+    .used-marker::before { content:""; display:block; width:2px; height:28px; margin:auto; background:var(--amber); }
+    .used-marker::after { content:"▲"; position:absolute; top:-9px; left:50%; transform:translateX(-50%); }
+    .analogy-map { display:grid; grid-template-columns:1.35fr 72px 1fr; gap:12px; align-items:center; padding:22px; border:1px solid var(--line); border-radius:14px; background:#0d1528; }
+    .parcel-box,.shipping-label,.pool-box { border-radius:12px; border:2px solid #53698e; background:#141f36; }
+    .parcel-box { padding:16px; box-shadow:inset 0 0 25px #0006; }
+    .parcel-title { margin-bottom:12px; color:#c7d9f4; font-weight:700; }
+    .parcel-row { display:flex; min-height:74px; overflow:hidden; border:2px solid #7185aa; border-radius:8px; }
+    .parcel-row span { display:grid; place-items:center; padding:8px; text-align:center; font-weight:700; }
+    .parcel-a { flex:2; background:#245b86; }.parcel-b { flex:3; background:#28765f; }.parcel-c { flex:1.5; background:#745c2d; }.parcel-empty { flex:3.5; color:var(--muted); background:#18243b; }
+    .map-arrow { color:var(--blue); text-align:center; font-size:38px; line-height:1; }
+    .map-arrow small { display:block; margin-top:8px; color:var(--muted); font-size:12px; line-height:1.35; }
+    .shipping-label { padding:15px; border-color:var(--blue); background:#17243d; }
+    .shipping-label h3 { padding-bottom:8px; border-bottom:1px dashed #5d7194; }
+    .label-row { display:flex; justify-content:space-between; gap:12px; padding:5px 0; }
+    .label-row code { color:#9dcbff; }.label-row span { text-align:right; }
+    .return-flow { display:grid; grid-template-columns:1fr 54px 1fr; gap:10px; align-items:center; margin-top:16px; }
+    .pool-box { padding:12px; text-align:center; }.pool-box strong { display:block; color:var(--green); }.pool-arrow { color:var(--green); text-align:center; font-size:25px; }
+    ol,ul { padding-left:22px; }
+    .foot { margin-top:45px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+    @media(max-width:760px) { .grid,.beforeafter,.analogy-map,.return-flow { grid-template-columns:1fr; } .arrow { transform:rotate(90deg); } .map-arrow,.pool-arrow { transform:rotate(90deg); padding:6px; } main{padding:26px 14px 55px;} }
+  </style>
+</head>
+<body><main>
+  <section class="hero">
+    <div class="sub">Working tree vs Git HEAD <code>c601c0b</code> · 2026-07-23</div>
+    <h1>SendBuffer 구조 변경 분석</h1>
+    <p>핵심은 송신 버퍼마다 메모리를 소유하던 구조를, <strong>스레드별 고정 크기 청크에서 필요한 구간만 빌려 쓰고 청크 자체는 전역 풀에서 재사용</strong>하는 구조로 바꾼 것이다.</p>
+    <span class="badge">10 files changed</span><span class="badge">+201 / −36</span><span class="badge">Chunk 6,000 bytes</span><span class="badge">TLS + Global Pool</span>
+  </section>
+
+  <h2>한눈에 보는 변화</h2>
+  <div class="grid">
+    <div class="card"><div class="metric">소유 → 참조</div><p>기존 <code>SendBuffer</code>의 개별 <code>Vector&lt;BYTE&gt;</code>가 사라지고, 청크 내부 주소와 청크 소유 참조를 보관한다.</p></div>
+    <div class="card"><div class="metric">TLS</div><p>각 스레드는 <code>LSendBufferChunk</code> 하나를 현재 쓰기 청크로 유지한다.</p></div>
+    <div class="card"><div class="metric">Pool</div><p>사용이 끝난 청크는 <code>SendBufferManager</code>의 전역 목록으로 돌아가 재사용된다.</p></div>
+  </div>
+
+  <h2>기존과 현재 구조</h2>
+  <div class="beforeafter">
+    <div class="flow"><h3>Git HEAD</h3><div class="step"><code>MakeShared&lt;SendBuffer&gt;(4096)</code></div><div class="step">버퍼마다 <code>Vector&lt;BYTE&gt;</code> 생성·소유</div><div class="step"><code>CopyData()</code>가 복사와 길이 확정을 함께 수행</div><div class="step">참조가 끝나면 개별 버퍼 메모리 해제</div></div>
+    <div class="arrow">→</div>
+    <div class="flow"><h3>현재 작업 트리</h3><div class="step"><code>GSendBufferManager-&gt;Open(4096)</code></div><div class="step">TLS 청크의 현재 위치를 포인터로 대여</div><div class="step">호출자가 <code>memcpy()</code> 후 <code>Close(len)</code></div><div class="step">버퍼가 청크를 붙잡아 비동기 송신 중 수명 보장</div></div>
+  </div>
+
+  <h2>메모리와 수명 흐름</h2>
+  <div class="flow">
+    <div class="step"><strong>1. Open</strong> — TLS 청크가 없으면 전역 풀에서 꺼내고, 남은 공간이 요청 크기보다 작아도 새 청크로 교체한다.</div>
+    <div class="step"><strong>2. Reserve</strong> — 청크의 <code>_usedSize</code> 위치를 시작 주소로 하는 <code>SendBuffer</code>를 ObjectPool에서 만든다.</div>
+    <div class="step"><strong>3. Write / Close</strong> — 호출자가 데이터를 기록한 뒤 실제 기록 길이를 확정한다. 청크는 그 길이만큼 <code>_usedSize</code>를 전진시킨다.</div>
+    <div class="step"><strong>4. Async Send</strong> — 세션의 SendEvent가 <code>SendBufferRef</code>를 보관하고, 버퍼의 <code>_owner</code>가 청크를 계속 살려 둔다.</div>
+    <div class="step"><strong>5. Recycle</strong> — TLS와 모든 송신 참조가 사라지면 커스텀 deleter가 청크를 전역 관리자 목록에 반환한다.</div>
+  </div>
+
+  <h2>두 단계 풀링 구조</h2>
+  <div class="beforeafter">
+    <div class="flow"><h3>① SendBufferChunk 풀</h3><div class="step">6,000바이트 실제 패킷 데이터 저장소</div><div class="step">전역 <code>SendBufferManager</code>가 대기 청크를 보관</div><div class="step">스레드가 <code>Pop()</code>한 뒤 TLS에서 락 없이 순차 사용</div><div class="step">모든 참조 종료 후 <code>PushGlobal()</code>로 반환</div></div>
+    <div class="arrow">+</div>
+    <div class="flow"><h3>② ObjectPool&lt;SendBuffer&gt;</h3><div class="step">개별 패킷의 시작 주소·크기·소유 청크를 기록하는 관리 객체</div><div class="step">패킷마다 필요한 작은 객체의 반복 할당/해제를 줄임</div><div class="step"><code>shared_ptr</code>로 비동기 송신 완료까지 수명 유지</div><div class="step">참조 수 0이면 <code>ObjectPool::Push()</code>로 객체 반환</div></div>
+  </div>
+  <div class="callout"><strong>역할 구분</strong><br>청크의 <code>_usedSize</code>는 큰 저장소가 전체적으로 어디까지 사용됐는지 관리한다. 각 <code>SendBuffer</code>는 그 안의 특정 패킷 구간을 나타내는 뷰이며, <code>_owner</code>를 통해 원본 청크를 붙잡는다. 따라서 청크 풀링과 SendBuffer 오브젝트 풀링은 중복이 아니라 서로 다른 메모리와 수명을 최적화한다.</div>
+  <div class="callout warn"><strong>shared_ptr 제어 블록</strong><br>현재 <code>ObjectPool&lt;SendBuffer&gt;</code>는 SendBuffer 본체 메모리를 재사용한다. 하지만 raw pointer와 커스텀 deleter로 생성한 <code>shared_ptr</code>의 제어 블록은 일반적으로 별도 동적 할당되므로 완전한 무할당 구조는 아니다.</div>
+
+  <h2>택배 상자와 송장으로 이해하기</h2>
+  <div class="analogy-map" role="img" aria-label="큰 택배 상자 안의 패킷 B와 해당 패킷의 위치, 크기, 소유 청크를 기록한 송장이 연결된 모습">
+    <div class="parcel-box">
+      <div class="parcel-title">📦 SendBufferChunk A · 6,000 bytes</div>
+      <div class="parcel-row">
+        <span class="parcel-a">패킷 A</span><span class="parcel-b">패킷 B</span><span class="parcel-c">패킷 C</span><span class="parcel-empty">남은 공간</span>
+      </div>
+    </div>
+    <div class="map-arrow">←<small>송장이 패킷 B의<br>위치를 가리킴</small></div>
+    <div class="shipping-label">
+      <h3>🏷️ SendBuffer · 송장 B</h3>
+      <div class="label-row"><code>_buffer</code><span>패킷 B 시작 주소</span></div>
+      <div class="label-row"><code>_writeSize</code><span>250 bytes</span></div>
+      <div class="label-row"><code>_owner</code><span>Chunk A</span></div>
+    </div>
+  </div>
+  <div class="return-flow">
+    <div class="pool-box"><strong>ObjectPool&lt;SendBuffer&gt;</strong>송장 객체 재사용</div>
+    <div class="pool-arrow">←</div>
+    <div class="pool-box"><strong>송신 완료 · 참조 수 0</strong>송장은 ObjectPool로, 상자는 Manager로 반환</div>
+  </div>
+  <div class="flow">
+    <h3>SendBufferChunk는 큰 택배 상자</h3>
+    <p>6,000바이트짜리 큰 상자 하나에 패킷 데이터를 차례대로 담는다.</p>
+    <div class="memory-wrap" aria-label="청크 내부에 패킷 A, B, C가 차례대로 저장되고 usedSize 뒤에는 남은 공간이 있는 모습">
+      <div class="memory-box">
+        <div class="memory-cell packet-a">패킷 A<small>100 bytes</small></div>
+        <div class="memory-cell packet-b">패킷 B<small>250 bytes</small></div>
+        <div class="memory-cell packet-c">패킷 C<small>80 bytes</small></div>
+        <div class="memory-cell memory-free">아직 사용하지 않은 공간</div>
+      </div>
+      <div class="used-marker">_usedSize<br>다음 기록 위치</div>
+    </div>
+    <p><code>Close()</code>가 끝난 패킷 뒤로 <code>_usedSize</code>가 이동하고, 다음 <code>Open()</code>은 화살표 위치부터 시작한다. 구간 너비는 이해를 위한 표현이며 실제 바이트 비율과는 다르다.</p>
+  </div>
+  <div class="flow" style="margin-top:12px">
+    <h3>SendBuffer는 각 패킷에 붙는 택배 송장</h3>
+    <p>하나의 큰 상자 안에는 여러 패킷이 있으므로 각 패킷의 위치와 크기를 설명하는 관리 정보가 필요하다.</p>
+    <div class="step"><strong>송장 A</strong> — 시작 위치 0, 실제 길이 100, 소유 상자 Chunk A</div>
+    <div class="step"><strong>송장 B</strong> — 시작 위치 100, 실제 길이 250, 소유 상자 Chunk A</div>
+    <div class="step"><strong>송장 C</strong> — 시작 위치 350, 실제 길이 80, 소유 상자 Chunk A</div>
+    <p>코드에서는 <code>_buffer</code>가 시작 위치, <code>_writeSize</code>가 실제 길이, <code>_owner</code>가 소유 상자를 나타낸다.</p>
+  </div>
+  <div class="beforeafter" style="margin-top:12px">
+    <div class="flow"><h3>큰 상자 재사용</h3><div class="step"><code>SendBufferManager</code>가 Chunk를 풀링</div><div class="step">실제 패킷 데이터 저장 공간의 반복 할당을 줄임</div></div>
+    <div class="arrow">+</div>
+    <div class="flow"><h3>송장 재사용</h3><div class="step"><code>ObjectPool&lt;SendBuffer&gt;</code>가 송장 객체를 풀링</div><div class="step">패킷별 관리 객체의 반복 할당을 줄임</div></div>
+  </div>
+  <div class="callout"><strong>왜 shared_ptr인가?</strong><br>택배 운송이 끝나기 전에 송장과 상자를 버리면 안 되는 것처럼, 비동기 <code>WSASend</code>가 끝날 때까지 <code>shared_ptr&lt;SendBuffer&gt;</code>가 송장을 보관하고 송장의 <code>_owner</code>가 큰 상자를 붙잡는다. 송신 완료 후 모든 참조가 사라지면 송장은 ObjectPool로, 상자는 SendBufferManager의 청크 풀로 돌아간다.</div>
+
+  <h2>파일별 변경</h2>
+  <table>
+    <thead><tr><th>파일</th><th>변경 역할</th><th>영향</th></tr></thead>
+    <tbody>
+      <tr><td><code>ServerCore/SendBuffer.h/.cpp</code></td><td><code>SendBufferChunk</code>, <code>SendBufferManager</code>, Open/Close 프로토콜과 풀링 구현</td><td>변경의 중심</td></tr>
+      <tr><td><code>ServerCore/CoreTLS.h/.cpp</code></td><td><code>thread_local SendBufferChunkRef</code> 추가</td><td>락 없는 스레드 로컬 fast path</td></tr>
+      <tr><td><code>ServerCore/CoreGlobal.h/.cpp</code></td><td>전역 <code>GSendBufferManager</code> 생성·삭제</td><td>청크 풀의 전역 수명 관리</td></tr>
+      <tr><td><code>ServerCore/Types.h</code></td><td><code>SendBufferChunkRef</code> 별칭 추가</td><td>공유 소유권 표현</td></tr>
+      <tr><td><code>ServerCore/Container.h</code></td><td><code>std::array</code> 기반 <code>Array</code> 별칭 추가</td><td>6,000바이트 고정 청크 저장소</td></tr>
+      <tr><td><code>GameServer/GameSession.cpp</code></td><td>생성/복사 API를 Open/memcpy/Close로 전환</td><td class="warn">Broadcast 횟수가 5회에서 1회로 함께 변경됨</td></tr>
+      <tr><td><code>DummyClient/DummyClient.cpp</code></td><td>두 송신 위치를 새 API로 전환</td><td>호출부 계약 변경 반영</td></tr>
+    </tbody>
+  </table>
+
+  <h2>현재 로컬에 추가된 방어 코드</h2>
+  <div class="flow">
+    <div class="step"><strong>잔여 공간 재검사</strong> — <code>SendBufferChunk::Open()</code>에 <code>if (allocSize &gt; FreeSize()) return nullptr;</code>가 추가됐다. Manager에서도 먼저 검사하지만 Chunk 직접 호출이나 향후 코드 변경을 방어하는 이중 검증이다.</div>
+    <div class="step"><strong>Reset 의도 명시</strong> — <code>Reset()</code>은 byte 배열을 0으로 지우지 않고 <code>_open = false</code>, <code>_usedSize = 0</code>만 수행한다. 이후 기록 데이터가 기존 내용을 덮고 실제 <code>WriteSize()</code>만 송신한다.</div>
+  </div>
+
+  <h2>기대 효과</h2>
+  <ul>
+    <li><span class="good">동적 할당 감소:</span> 매 송신마다 byte vector를 새로 확보하는 비용을 줄인다.</li>
+    <li><span class="good">지역성 개선:</span> 한 스레드가 생성한 여러 패킷이 같은 연속 청크에 배치된다.</li>
+    <li><span class="good">비동기 수명 보장:</span> SendBuffer가 owner 청크를 공유 소유하므로 WSASend 완료 전 메모리가 재사용되지 않는다.</li>
+    <li><span class="good">경합 축소:</span> 평상시 할당은 TLS 청크에서 처리하며, 청크 교체/반환 때만 전역 락을 사용한다.</li>
+  </ul>
+
+  <h2>확인된 주의점과 위험</h2>
+  <div class="callout risk"><strong>높음 — 전역 종료 순서 위험</strong><br><code>delete GSendBufferManager</code> 중 내부 vector의 청크 참조가 파괴되면 커스텀 deleter <code>PushGlobal</code>이 다시 같은 관리자에 청크를 넣는다. 객체가 소멸 중인 상태에서 멤버와 락에 재진입하므로 종료 시 미정의 동작 또는 누수/크래시 가능성이 있다. 종료 전 반환 경로를 끄거나, 풀의 raw ownership/명시적 destroy 정책을 분리하는 편이 안전하다.</div>
+  <div class="callout warn"><strong>중간 — Close가 API의 필수 계약</strong><br><code>Close()</code>를 누락하면 WriteSize가 0이고 청크가 열린 채 남아 다음 <code>Open()</code>에서 assert가 발생한다. 두 번 호출하면 보통 assert되지만, 사이에 다른 버퍼가 열렸다면 이전 버퍼의 중복 Close가 새 버퍼 상태를 잘못 닫을 여지도 있다. SendBuffer 자체에 closed 상태를 두는 방어가 없다.</div>
+  <div class="callout warn"><strong>중간 — 요청 크기 상한</strong><br>한 번의 <code>Open(size)</code>는 6,000바이트 이하여야 한다. 기존 생성자는 임의의 크기를 받을 수 있었으므로 향후 6,000바이트 초과 패킷은 assert로 종료된다.</div>
+  <div class="callout warn"><strong>중간 — 기능 변경 혼입</strong><br><code>GameSession::OnRecv</code>의 Broadcast 반복이 5회에서 1회로 바뀌었다. SendBuffer 구조 전환과 별개의 동작 변화이므로 의도 여부를 확인해야 한다.</div>
+  <div class="callout"><strong>낮음 — 디버그 출력과 형식</strong><br>매 Open마다 <code>cout &lt;&lt; "FREE ..."</code>가 실행되어 고빈도 송신 경로 성능과 로그에 영향을 준다. 또한 <code>git diff --check</code>에서 trailing whitespace 1건과 파일 끝 빈 줄 경고가 확인됐다.</div>
+
+  <h2>새 호출 규칙</h2>
+  <pre class="flow"><code>SendBufferRef sendBuffer = GSendBufferManager-&gt;Open(allocSize);
+::memcpy(sendBuffer-&gt;Buffer(), source, writeSize);
+sendBuffer-&gt;Close(writeSize);   // writeSize &lt;= allocSize, 정확히 한 번
+Send(sendBuffer);</code></pre>
+  <p class="sub">동시에 같은 스레드에서 두 버퍼를 Open할 수 없다. 첫 버퍼를 Close한 뒤 다음 버퍼를 Open해야 한다.</p>
+
+  <h2>검증 결과</h2>
+  <table><tbody>
+    <tr><td>Git 비교 기준</td><td><code>c601c0bd1bfaf2059b52c6322aec984807f92058</code> (<code>SendBuffer 개선</code>)</td></tr>
+    <tr><td>변경 규모</td><td>10 files, 201 insertions, 36 deletions</td></tr>
+    <tr><td>정적 점검</td><td>diff와 호출부/WSASend 보관 경로 확인 완료</td></tr>
+    <tr><td>빌드</td><td class="warn">현재 환경에서 MSBuild 실행 파일을 찾지 못해 미수행</td></tr>
+  </tbody></table>
+
+  <div class="foot">이 문서는 커밋되지 않은 현재 작업 트리를 Git HEAD와 비교해 작성했다. 보고서 파일 자체는 비교 통계에 포함하지 않았다.</div>
+</main></body></html>
