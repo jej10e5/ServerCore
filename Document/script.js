@@ -8,7 +8,9 @@
     { file: "event-multiplexing.html", title: "이벤트 기반 다중화" },
     { file: "overlapped-io.html", title: "Overlapped I/O" },
     { file: "iocp-overview.html", title: "IOCP Accept 흐름 Overview" },
-    { file: "iocp-owner-dispatch.html", title: "IOCP owner 기반 Dispatch" }
+    { file: "iocp-owner-dispatch.html", title: "IOCP owner 기반 Dispatch" },
+    { file: "SendBuffer_Git_Comparison_Report.html", title: "SendBuffer Git 비교 보고서" },
+    { file: "packet-session-git-comparison.html", title: "PacketSession 로컬 변경 분석" }
   ];
 
   const keywords = new Set([
@@ -25,7 +27,8 @@
     "DWORD", "FD_SET", "LINGER", "LPWSAOVERLAPPED", "SOCKADDR", "SOCKADDR_IN", "SOCKET",
     "WSABUF", "WSADATA", "WSAData", "WSAEVENT", "WSANETWORKEVENTS", "WSAOVERLAPPED",
     "int32", "uint32", "u_long", "vector", "IocpCore", "IocpEvent", "IocpObjectRef",
-    "Session", "SessionRef", "AcceptEvent", "RecvEvent", "ULONG_PTR"
+    "Session", "SessionRef", "PacketSession", "PacketSessionRef", "PacketHeader",
+    "SendBufferRef", "AcceptEvent", "RecvEvent", "ULONG_PTR"
   ]);
 
   function escapeHtml(value) {
