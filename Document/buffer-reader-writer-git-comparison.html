@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BufferReader / BufferWriter Git 비교</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    table { width:100%; border-collapse:collapse; background:#fff; }
+    th,td { padding:11px 13px; border:1px solid #d8dee4; text-align:left; vertical-align:top; }
+    th { background:#eef2f7; }
+    .risk { border-left-color:#dc2626; }
+    .warn { border-left-color:#f59e0b; }
+    .ok { border-left-color:#16a34a; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>BufferReader / BufferWriter 추가 분석</h1>
+  <p class="lead">
+    GitHub <code>origin/master</code>의 <code>71e7a86</code>과 현재 로컬 작업 트리를 비교한 결과입니다.
+    로컬에는 패킷 바이트 배열을 순서대로 읽고 쓰는 유틸리티와 이를 사용하는 예제가 추가됐습니다.
+  </p>
+
+  <section class="concept ok">
+    <h2>핵심 변화</h2>
+    <p>
+      기존에는 <code>buffer[4]</code> 같은 고정 오프셋과 <code>memcpy</code>를 호출부에서 직접 관리했습니다.
+      변경 후에는 <code>BufferWriter</code>가 쓰기 위치를, <code>BufferReader</code>가 읽기 위치를 관리합니다.
+      패킷 필드의 선언 순서가 곧 직렬화 순서가 되므로 호출부가 간결해집니다.
+    </p>
+  </section>
+
+  <h2>변경 규모</h2>
+  <table>
+    <thead><tr><th>구분</th><th>내용</th></tr></thead>
+    <tbody>
+      <tr><td>GitHub 기준</td><td><code>origin/master</code> = <code>71e7a86cd8a014095ff60417deab93e0d94cca17</code></td></tr>
+      <tr><td>신규 파일</td><td><code>BufferReader.h/.cpp</code>, <code>BufferWriter.h/.cpp</code> 4개</td></tr>
+      <tr><td>수정 파일</td><td>호출부 2개, SendBuffer 2개, Visual Studio 프로젝트 파일 2개</td></tr>
+      <tr><td>프로토콜 예제</td><td><code>PacketHeader + uint64 id + uint32 hp + uint16 attack + 문자열</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>송신 흐름</h2>
+  <div class="diagram">
+    <div class="flow flow-wide">
+      <div class="node">SendBuffer Open</div><span class="arrow">→</span>
+      <div class="node">Header Reserve</div><span class="arrow">→</span>
+      <div class="node">필드 &lt;&lt; 기록</div><span class="arrow">→</span>
+      <div class="node">문자열 Write</div><span class="arrow">→</span>
+      <div class="node server">크기 확정·Close</div>
+    </div>
+  </div>
+  <pre><code>BufferWriter bw(sendBuffer-&gt;Buffer(), 4096);
+PacketHeader* header = bw.Reserve&lt;PacketHeader&gt;();
+bw &lt;&lt; (uint64)1001 &lt;&lt; (uint32)100 &lt;&lt; (uint16)10;
+bw.Write(sendData, sizeof(sendData));
+header-&gt;size = bw.WriteSize();
+sendBuffer-&gt;Close(bw.WriteSize());</code></pre>
+
+  <h2>수신 흐름</h2>
+  <div class="diagram">
+    <div class="flow flow-wide">
+      <div class="node">패킷 버퍼</div><span class="arrow">→</span>
+      <div class="node">Header &gt;&gt;</div><span class="arrow">→</span>
+      <div class="node">필드 &gt;&gt;</div><span class="arrow">→</span>
+      <div class="node server">문자열 Read</div>
+    </div>
+  </div>
+  <pre><code>BufferReader br(buffer, len);
+PacketHeader header;
+br &gt;&gt; header;
+
+uint64 id;
+uint32 hp;
+uint16 attack;
+br &gt;&gt; id &gt;&gt; hp &gt;&gt; attack;
+br.Read(recvBuffer, header.size - sizeof(PacketHeader) - 8 - 4 - 2);</code></pre>
+
+  <h2>파일별 변경</h2>
+  <table>
+    <thead><tr><th>파일</th><th>추가·변경 내용</th></tr></thead>
+    <tbody>
+      <tr><td><code>ServerCore/BufferReader.*</code></td><td><code>Peek</code>, <code>Read</code>, <code>operator&gt;&gt;</code>와 읽기 위치 관리 추가</td></tr>
+      <tr><td><code>ServerCore/BufferWriter.*</code></td><td><code>Reserve</code>, <code>Write</code>, <code>operator&lt;&lt;</code>와 쓰기 위치 관리 추가</td></tr>
+      <tr><td><code>GameServer/GameServer.cpp</code></td><td>헤더와 payload를 Writer로 조립하도록 변경</td></tr>
+      <tr><td><code>DummyClient/DummyClient.cpp</code></td><td>Reader로 헤더와 각 payload 필드를 순서대로 해석하도록 변경</td></tr>
+      <tr><td><code>ServerCore/SendBuffer.*</code></td><td>할당 크기 타입을 <code>uint32</code>로 통일하고 <code>AllocSize()</code> 공개</td></tr>
+      <tr><td><code>ServerCore.vcxproj(.filters)</code></td><td>신규 파일을 빌드 대상과 Utils 필터에 등록</td></tr>
+    </tbody>
+  </table>
+
+  <h2>현재 확인이 필요한 부분</h2>
+  <section class="concept risk">
+    <p><strong>연산자의 범위 검사가 없습니다.</strong> <code>operator&gt;&gt;</code>와 두 <code>operator&lt;&lt;</code>는
+      <code>FreeSize()</code>를 확인하지 않아 잘못된 패킷이나 용량 계산 오류가 있으면 버퍼 밖을 읽거나 쓸 수 있습니다.</p>
+    <p><strong>Writer 템플릿 오타가 있습니다.</strong> <code>BufferWriter::Write(T* src)</code>가 존재하지 않는
+      <code>Read(src, sizeof(T))</code>를 호출합니다. 이 오버로드가 인스턴스화되면 컴파일 오류가 발생합니다.</p>
+    <p><strong>역직렬화 실패가 호출부에 전달되지 않습니다.</strong> 문자열 <code>Read()</code> 결과를 검사하지 않고,
+      payload 길이 계산도 unsigned 뺄셈이므로 작은 <code>header.size</code> 입력에서 언더플로가 생길 수 있습니다.</p>
+    <p><strong>정렬과 표현 형식이 호스트에 의존합니다.</strong> <code>reinterpret_cast&lt;T*&gt;</code> 직접 접근은
+      정렬되지 않은 주소에서 문제가 될 수 있고, 현재 프로토콜은 엔디언과 구조체 패딩을 명시하지 않습니다.</p>
+  </section>
+
+  <h2>정리</h2>
+  <p>
+    이번 추가분은 패킷 조립과 해석의 반복 코드를 공통 유틸리티로 이동하는 첫 단계입니다.
+    정상 입력의 예제 흐름은 읽기 쉬워졌지만, 네트워크 입력에 사용하려면 모든 읽기·쓰기 경로의 용량 검증,
+    실패 전파, 안전한 복사 방식과 프로토콜 바이트 순서를 먼저 확정하는 것이 좋습니다.
+  </p>
+
+  <nav class="topic-nav">
+    <a href="index.html">← 문서 목록</a>
+    <a class="primary" href="packet-session-git-comparison.html">PacketSession 분석 →</a>
+  </nav>
+</main>
+</body>
+</html>
