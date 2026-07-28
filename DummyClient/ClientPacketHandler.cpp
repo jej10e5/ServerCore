@@ -35,6 +35,7 @@ struct S_TEST
 	// 2) 그냥 바이트 배열 (ex. 길드 이미지)
 	// 3) 일반 리스트
 	vector<BuffData> buffs;
+	wstring name;
 };
 
 void ClientPacketHandler::Handle_S_TEST(BYTE* buffer, int32 len)
@@ -66,4 +67,13 @@ void ClientPacketHandler::Handle_S_TEST(BYTE* buffer, int32 len)
 	{
 		cout << "BufInfo : " << buffs[i].buffid << " " << buffs[i].remainTime << endl;
 	}
+
+	wstring name;
+	uint16 nameLen;
+	br >> nameLen;
+	name.resize(nameLen);
+	br.Read((void*)name.data(), nameLen * sizeof(WCHAR));
+
+	wcout.imbue(std::locale("kor"));
+	wcout << name << endl;
 }
