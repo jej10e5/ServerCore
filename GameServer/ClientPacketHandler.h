@@ -7,20 +7,17 @@ extern PacketHandlerFunc GPacketHandler[UINT16_MAX];
 // TODO : 자동화
 enum : uint16
 {
-{%- for pkt in parser.total_pkt %}
-	PKT_{{pkt.name}} = {{pkt.id}},
-{%- endfor %}
+	PKT_C_TEST = 1000,
+	PKT_S_TEST = 1001,
+	PKT_S_LOGIN = 1002,
 };
 
 // TODO : 자동화
 // Custom Handlers
 bool Handle_INVALID(PacketSessionRef& session, BYTE* buffer, int32 len);
+bool Handle_C_TEST(PacketSessionRef& session, Protocol::C_TEST& pkt);
 
-{%- for pkt in parser.recv_pkt %}
-bool Handle_{{pkt.name}}(PacketSessionRef& session, Protocol::{{pkt.name}}& pkt);
-{%- endfor %}
-
-class {{output}}
+class ClientPacketHandler
 {
 public:
 	//TODO : 자동화
@@ -28,9 +25,7 @@ public:
 	{
 		for (int32 i = 0; i < UINT16_MAX; i++)
 			GPacketHandler[0] = Handle_INVALID;
-{%- for pkt in parser.recv_pkt %}
-		GPacketHandler[PKT_{{pkt.name}}] = [](PacketSessionRef& session, BYTE* buffer, int32 len) {return HandlePacket<Protocol::{{pkt.name}}>(Handle_{{pkt.name}}, session, buffer, len); };
-{%- endfor %}
+		GPacketHandler[PKT_C_TEST] = [](PacketSessionRef& session, BYTE* buffer, int32 len) {return HandlePacket<Protocol::C_TEST>(Handle_C_TEST, session, buffer, len); };
 	}
 
 	static void HandlePacket(PacketSessionRef& session, BYTE* buffer, int32 len)
@@ -40,9 +35,7 @@ public:
 	}
 
 	//TODO : 자동화
-{%- for pkt in parser.recv_pkt%}
-	static SendBufferRef MakeSendBuffer(Protocol::{{pkt.name}}& pkt) { return MakeSendBuffer(pkt, PKT_{{pkt.name}}); }
-{%- endfor %}
+	static SendBufferRef MakeSendBuffer(Protocol::C_TEST& pkt) { return MakeSendBuffer(pkt, PKT_C_TEST); }
 private:
 	template<typename PacketType, typename ProcessFunc>
 	static bool HandlePacket(ProcessFunc func, PacketSessionRef& session, BYTE* buffer, int32 len)

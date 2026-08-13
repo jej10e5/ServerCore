@@ -4,30 +4,30 @@
 using PacketHandlerFunc = std::function<bool(PacketSessionRef&, BYTE*, int32)>;
 extern PacketHandlerFunc GPacketHandler[UINT16_MAX];
 
-// TODO : �ڵ�ȭ
+// TODO : 자동화
 enum : uint16
 {
-	PKT_S_TEST = 1,
-	PKT_S_LOGIN = 2,
-
+	PKT_C_TEST = 1000,
+	PKT_S_TEST = 1001,
+	PKT_S_LOGIN = 1002,
 };
 
-// TODO : �ڵ�ȭ
+// TODO : 자동화
 // Custom Handlers
 bool Handle_INVALID(PacketSessionRef& session, BYTE* buffer, int32 len);
 bool Handle_S_TEST(PacketSessionRef& session, Protocol::S_TEST& pkt);
+bool Handle_S_LOGIN(PacketSessionRef& session, Protocol::S_LOGIN& pkt);
 
 class ServerPacketHandler
 {
 public:
-	//TODO : �ڵ�ȭ
+	//TODO : 자동화
 	static void Init()
 	{
-		for(int32 i=0;i<UINT16_MAX;i++)
+		for (int32 i = 0; i < UINT16_MAX; i++)
 			GPacketHandler[0] = Handle_INVALID;
-
 		GPacketHandler[PKT_S_TEST] = [](PacketSessionRef& session, BYTE* buffer, int32 len) {return HandlePacket<Protocol::S_TEST>(Handle_S_TEST, session, buffer, len); };
-
+		GPacketHandler[PKT_S_LOGIN] = [](PacketSessionRef& session, BYTE* buffer, int32 len) {return HandlePacket<Protocol::S_LOGIN>(Handle_S_LOGIN, session, buffer, len); };
 	}
 
 	static void HandlePacket(PacketSessionRef& session, BYTE* buffer, int32 len)
@@ -36,9 +36,9 @@ public:
 		GPacketHandler[header->id](session, buffer, len);
 	}
 
-	//TODO : �ڵ�ȭ
+	//TODO : 자동화
 	static SendBufferRef MakeSendBuffer(Protocol::S_TEST& pkt) { return MakeSendBuffer(pkt, PKT_S_TEST); }
-
+	static SendBufferRef MakeSendBuffer(Protocol::S_LOGIN& pkt) { return MakeSendBuffer(pkt, PKT_S_LOGIN); }
 private:
 	template<typename PacketType, typename ProcessFunc>
 	static bool HandlePacket(ProcessFunc func, PacketSessionRef& session, BYTE* buffer, int32 len)

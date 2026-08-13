@@ -165,7 +165,7 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="ClientPacketHandler.cpp" />
+    <ClCompile Include="ServerPacketHandler.cpp" />
     <ClCompile Include="DummyClient.cpp" />
     <ClCompile Include="Enum.pb.cc" />
     <ClCompile Include="pch.cpp" />
@@ -175,7 +175,7 @@
     <ClCompile Include="Struct.pb.cc" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="ClientPacketHandler.h" />
+    <ClInclude Include="ServerPacketHandler.h" />
     <ClInclude Include="Enum.pb.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="Protocol.pb.h" />
