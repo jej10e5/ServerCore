@@ -24,9 +24,11 @@ public:
 
 	virtual bool	Start() abstract;
 	bool			CanStart() { return _sessionFactory != nullptr; }
+
 	virtual void	CloseService();
 	void			SetSessionFactory(SessionFactory func) { _sessionFactory = func; }
 
+	void			Broadcast(SendBufferRef sendBuffer);
 	SessionRef		CreateSession();
 	void			AddSession(SessionRef session);
 	void			ReleaseSession(SessionRef session);

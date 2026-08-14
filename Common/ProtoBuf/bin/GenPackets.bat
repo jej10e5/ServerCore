@@ -22,6 +22,7 @@ XCOPY /Y Enum.pb.cc "../../../DummyClient"
 XCOPY /Y Struct.pb.h "../../../DummyClient"
 XCOPY /Y Struct.pb.cc "../../../DummyClient"
 XCOPY /Y Protocol.pb.h "../../../DummyClient"
+XCOPY /Y Protocol.pb.cc "../../../DummyClient"
 XCOPY /Y ServerPacketHandler.h "../../../DummyClient"
 
 DEL /Q /F *.pb.h
