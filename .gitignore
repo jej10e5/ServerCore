@@ -45,6 +45,19 @@ Libraries/[Rr]elease/
 *.exp
 *.map
 
+# 생성기 산출물 (제너레이터 + 템플릿만 있으면 되므로 커밋하지 않는다)
+Tools/PacketGenerator/TestPacketHandler.h
+
+# 빌드에 반드시 필요해서 위 규칙에서 되살리는 항목들
+# (git은 제외된 디렉터리 안으로 들어가지 않으므로 디렉터리부터 풀어줘야 한다)
+!Common/ProtoBuf/bin/
+!Common/ProtoBuf/bin/GenPackets.exe
+!Common/ProtoBuf/bin/Templates/
+!Libraries/Libs/ProtoBuf/
+!Libraries/Libs/ProtoBuf/Debug/
+!Libraries/Libs/ProtoBuf/Release/
+!Libraries/Libs/ProtoBuf/**/*.lib
+
 # OS/editor noise
 Thumbs.db
 Desktop.ini

@@ -1,0 +1,1238 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>패킷 조립부 → 직렬화 발전사</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    table { width:100%; border-collapse:collapse; background:#fff; margin:14px 0; }
+    th,td { padding:10px 12px; border:1px solid #d8dee4; text-align:left; vertical-align:top; }
+    th { background:#eef2f7; }
+    td code, th code { white-space:nowrap; }
+
+    .risk { border-left-color:#dc2626; }
+    .warn { border-left-color:#f59e0b; }
+    .ok   { border-left-color:#16a34a; }
+
+    .stage { margin:38px 0 0; padding:20px 22px; border:1px solid #cbd5e1; border-left:5px solid #2563eb; border-radius:8px; background:#fff; }
+    .stage > h2 { margin-top:0; border-bottom:1px solid #e5e7eb; }
+    .stage-tag { display:inline-block; margin-bottom:6px; padding:3px 10px; border-radius:999px; background:#1e293b; color:#fff; font-family:Consolas,monospace; font-size:12px; font-weight:700; }
+    .stage-tag.local { background:#b45309; }
+
+    .qa { margin:16px 0; padding:14px 16px; border-radius:8px; background:#f8fafc; border:1px solid #e2e8f0; }
+    .qa p { margin:6px 0; }
+    .qa .q { font-weight:700; color:#b91c1c; }
+    .qa .a { font-weight:700; color:#15803d; }
+
+    .timeline { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:16px 0; }
+    .tl { padding:12px; border:1px solid #cbd5e1; border-radius:8px; background:#f8fafc; font-size:14px; }
+    .tl b { display:block; margin-bottom:4px; color:#111827; }
+    .tl span { display:block; color:#64748b; font-family:Consolas,monospace; font-size:12px; }
+    .tl.now { border-color:#f59e0b; background:#fffbeb; }
+
+    .cmp { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:16px 0; }
+    .cmp > div { border:1px solid #cbd5e1; border-radius:8px; padding:0; overflow:hidden; background:#fff; }
+    .cmp h4 { margin:0; padding:9px 13px; font-size:14px; background:#eef2f7; border-bottom:1px solid #d8dee4; }
+    .cmp.before-after > div:first-child h4 { background:#fef2f2; color:#991b1b; }
+    .cmp.before-after > div:last-child  h4 { background:#f0fdf4; color:#166534; }
+    .cmp pre { border:0; border-radius:0; box-shadow:none; }
+
+    svg.figure { display:block; width:100%; height:auto; }
+    .fignote { margin:10px 0 0; color:#64748b; font-size:13px; }
+
+    @media (max-width:760px) { .cmp { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>패킷 조립부 → 직렬화 발전사</h1>
+  <p class="lead">
+    <code>71e7a86</code>(패킷조립부 만들기)부터 현재 로컬 작업 트리까지, 커밋 7개를 순서대로 따라가며
+    <strong>“왜 이 코드가 나왔는지”</strong>를 정리한 문서입니다.
+    각 단계는 <em>직전 단계에서 실제로 불편했던 것</em>을 해결하려고 나온 것이라, 순서대로 읽으면 현재 코드가 자연스럽게 이해됩니다.
+  </p>
+
+  <section class="concept ok">
+    <h2>전체를 한 문장으로</h2>
+    <p>
+      <strong>“바이트 배열을 손으로 자르고 붙이던 것”을 → “구조체를 그대로 메모리에 얹는 것”으로 바꿔온 과정</strong>입니다.
+    </p>
+    <p>
+      중간 단계들은 전부 이 방향으로 가는 징검다리입니다.
+      손계산 오프셋 → 커서(<code>BufferReader/Writer</code>) → 함수로 캡슐화(<code>Make_/Handle_</code>) →
+      구조체 통짜 매핑(<code>#pragma pack</code>) → 복사 제거(<code>reinterpret_cast</code>) → 가변 리스트 중첩(offset/count).
+    </p>
+  </section>
+
+  <h2>타임라인</h2>
+  <div class="timeline">
+    <div class="tl"><b>1. 패킷 조립부</b><span>71e7a86</span>PacketSession · PacketHeader</div>
+    <div class="tl"><b>2. Buffer Helper</b><span>258dc01</span>BufferReader / BufferWriter</div>
+    <div class="tl"><b>3. 패킷 핸들러</b><span>78d6e9a</span>Make_ / Handle_ 분리</div>
+    <div class="tl"><b>4. 문자열 인코딩</b><span>f77cfdc</span>wstring · 길이 접두</div>
+    <div class="tl"><b>5. #pragma pack</b><span>747a555</span>구조체 통짜 매핑 · Validate</div>
+    <div class="tl"><b>6. 직렬화 개선</b><span>62b9d7a</span>제로카피 · PacketList</div>
+    <div class="tl now"><b>7. 현재 로컬</b><span>uncommitted</span>중첩 리스트 · Writer 빌더</div>
+  </div>
+
+  <!-- ============================================================ -->
+  <section class="stage">
+    <span class="stage-tag">Stage 0 · 출발점</span>
+    <h2>왜 “조립”이라는 말이 필요한가</h2>
+    <p>
+      TCP는 <strong>바이트 스트림</strong>입니다. 보낸 쪽이 <code>Send</code>를 3번 나눠 불렀어도
+      받는 쪽 <code>OnRecv</code>는 한 번에 뭉쳐서 받을 수도 있고, 반대로 한 번에 보낸 걸 잘라서 받을 수도 있습니다.
+      “메시지 경계”라는 개념 자체가 TCP에는 없습니다. (자세한 배경은
+      <a href="tcp-byte-stream.html">TCP 바이트 스트림</a> 참고)
+    </p>
+    <p>
+      그래서 <code>Stage 1</code> 이전의 <code>Session</code>은 이런 상태였습니다.
+    </p>
+    <pre><code class="language-cpp">// Stage 1 이전: Session은 "바이트 덩어리"만 넘겨준다
+virtual int32 OnRecv(BYTE* buffer, int32 len) override
+{
+    cout &lt;&lt; "OnRecv Len = " &lt;&lt; len &lt;&lt; endl;   // len이 몇인지 예측 불가
+    // ...에코로 그대로 되돌려보내기만 했음
+}</code></pre>
+    <p>
+      에코 서버까지는 이래도 됩니다. 하지만 “로그인 요청”, “이동 요청”처럼 <strong>의미 단위</strong>가 생기는 순간,
+      받은 바이트 덩어리를 <em>다시 메시지 단위로 잘라 붙이는 층</em>이 필요해집니다. 이게 <strong>패킷 조립부</strong>입니다.
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="stage">
+    <span class="stage-tag">Stage 1 · 71e7a86</span>
+    <h2>패킷 조립부 만들기 — <code>PacketSession</code></h2>
+
+    <div class="qa">
+      <p class="q">문제 — 받은 바이트에서 어디까지가 한 개의 패킷인지 알 수 없다.</p>
+      <p class="a">해결 — 모든 패킷 맨 앞에 <strong>크기(size)</strong>를 박아 넣는다. 크기를 알면 자를 수 있다.</p>
+    </div>
+
+    <p>이때 등장한 게 <code>PacketHeader</code> 4바이트입니다.</p>
+    <pre><code class="language-cpp">// ServerCore/Session.h
+// [size(2)][id(2)][data...][size(2)][id(2)][data...]
+struct PacketHeader
+{
+    uint16 size;    // 헤더를 포함한 이 패킷 전체 크기
+    uint16 id;      // 프로토콜 ID (ex. 1=로그인, 2=이동요청)
+};</code></pre>
+
+    <div class="diagram">
+      <p class="diagram-title">수신 버퍼에 도착한 바이트를 패킷 단위로 잘라내기</p>
+      <div class="stream">
+        <span class="byte">size=10</span><span class="byte">id=1</span><span class="byte">data(6B)</span>
+        <span class="byte recv">size=8</span><span class="byte recv">id=2</span><span class="byte recv">data(4B)</span>
+        <span class="byte" style="background:#fee2e2;color:#991b1b">size=20</span><span class="byte" style="background:#fee2e2;color:#991b1b">id=3</span><span class="byte" style="background:#fee2e2;color:#991b1b">data(3B만 도착…)</span>
+      </div>
+      <p class="fignote">
+        파랑·초록은 완성된 패킷이라 즉시 처리합니다. 빨강은 아직 <code>size</code>만큼 안 왔으므로
+        <strong>건드리지 않고 남겨둡니다</strong>. 이 “남은 만큼”을 다음 <code>recv</code> 때 이어붙이는 게 RecvBuffer(링버퍼)의 역할입니다.
+      </p>
+    </div>
+
+    <pre><code class="language-cpp">// ServerCore/Session.cpp
+int32 PacketSession::OnRecv(BYTE* buffer, int32 len)
+{
+    int32 processLen = 0;
+    while (true)
+    {
+        int32 dataSize = len - processLen;
+
+        // 최소한 헤더는 파싱할 수 있어야 한다
+        if (dataSize &lt; sizeof(PacketHeader))
+            break;
+
+        PacketHeader header = *(reinterpret_cast&lt;PacketHeader*&gt;(&amp;buffer[processLen]));
+
+        // 헤더에 기록된 패킷 크기를 파싱할 수 있어야 한다
+        if (dataSize &lt; header.size)
+            break;
+
+        // 패킷 조립 성공
+        OnRecvPacket(&amp;buffer[processLen], header.size);
+
+        processLen += header.size;
+    }
+
+    return processLen;   // "이만큼 소비했다"를 Session에 알려준다
+}</code></pre>
+
+    <p>
+      반환하는 <code>processLen</code>이 핵심입니다. <code>len</code>이 아니라 <strong>온전한 패킷까지만</strong> 소비했다고 보고하면,
+      남은 조각은 버퍼에 그대로 남아 다음 수신 데이터와 이어집니다.
+    </p>
+
+    <h3>sealed / abstract 조합</h3>
+    <pre><code class="language-cpp">// ServerCore/Session.h
+class PacketSession : public Session
+{
+protected:
+    virtual int32 OnRecv(BYTE* buffer, int32 len) sealed;        // 더 이상 재정의 금지
+    virtual int32 OnRecvPacket(BYTE* buffer, int32 len) abstract; // 반드시 구현해야 함
+};</code></pre>
+    <p>
+      <code>sealed</code>로 조립 로직을 잠가서 <strong>“자르는 건 코어가 책임진다”</strong>를 강제하고,
+      <code>abstract</code>로 <strong>“해석은 컨텐츠가 한다”</strong>를 강제합니다.
+      <code>GameSession</code>·<code>ServerSession</code>은 이제 <code>OnRecvPacket</code>만 구현하면 되고,
+      들어오는 <code>buffer</code>가 <strong>항상 완전한 패킷 하나</strong>임을 신뢰할 수 있습니다.
+    </p>
+
+    <h3>이때의 송신 코드 — 아직 날것</h3>
+    <pre><code class="language-cpp">// GameServer/GameServer.cpp
+SendBufferRef sendBuffer = GSendBufferManager-&gt;Open(4096);
+BYTE* buffer = sendBuffer-&gt;Buffer();
+
+((PacketHeader*)buffer)-&gt;size = (sizeof(sendData) + sizeof(PacketHeader));
+((PacketHeader*)buffer)-&gt;id   = 1;         // 1 : Hello Msg
+::memcpy(&amp;buffer[4], sendData, sizeof(sendData));   // ← 4가 어디서 나온 숫자?
+sendBuffer-&gt;Close(sizeof(sendData) + sizeof(PacketHeader));</code></pre>
+    <p>
+      <code>&amp;buffer[4]</code>의 <code>4</code>는 <code>sizeof(PacketHeader)</code>를 사람이 암산한 값입니다.
+      필드가 하나 늘면 이 숫자를 전부 다시 계산해야 하고, 받는 쪽 숫자도 같이 고쳐야 합니다.
+      <strong>이 불편함이 Stage 2를 부릅니다.</strong>
+    </p>
+    <p class="fignote">이 단계의 더 자세한 비교는 <a href="packet-session-git-comparison.html">PacketSession 로컬 변경 분석</a>에 있습니다.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="stage">
+    <span class="stage-tag">Stage 2 · 258dc01</span>
+    <h2>Buffer Helper — <code>BufferReader</code> / <code>BufferWriter</code></h2>
+
+    <div class="qa">
+      <p class="q">문제 — 오프셋을 사람이 손으로 계산한다. 필드가 늘면 양쪽을 전부 다시 센다.</p>
+      <p class="a">해결 — <strong>커서(<code>_pos</code>)</strong>를 객체가 들고 있게 한다. 쓰거나 읽을 때마다 알아서 전진.</p>
+    </div>
+
+    <p>두 클래스의 뼈대는 동일합니다. <code>버퍼 + 전체크기 + 현재위치</code> 3개뿐입니다.</p>
+    <pre><code class="language-cpp">// ServerCore/BufferWriter.h
+private:
+    BYTE*  _buffer = nullptr;
+    uint32 _size = 0;   // 버퍼 전체 크기
+    uint32 _pos  = 0;   // 지금까지 쓴 위치 = 곧 WriteSize()
+
+// operator&lt;&lt; : 그 자리에 T를 통째로 얹고, 커서를 sizeof(T)만큼 전진
+template&lt;typename T&gt;
+BufferWriter&amp; BufferWriter::operator&lt;&lt;(T&amp;&amp; src)
+{
+    using DataType = std::remove_reference_t&lt;T&gt;;
+    *reinterpret_cast&lt;DataType*&gt;(&amp;_buffer[_pos]) = std::forward&lt;DataType&gt;(src);
+    _pos += sizeof(T);
+    return *this;
+}</code></pre>
+
+    <h3>핵심 트릭 — <code>Reserve&lt;T&gt;()</code></h3>
+    <p>
+      헤더의 <code>size</code>는 <strong>다 쓰고 나서야</strong> 알 수 있습니다. 그런데 헤더는 <strong>맨 앞</strong>에 있어야 합니다.
+      이 모순을 “자리만 먼저 잡아두고 포인터를 들고 있다가 마지막에 채우기”로 풉니다.
+    </p>
+    <pre><code class="language-cpp">template&lt;typename T&gt;
+T* BufferWriter::Reserve()
+{
+    if (FreeSize() &lt; sizeof(T))
+        return nullptr;
+
+    T* ret = reinterpret_cast&lt;T*&gt;(&amp;_buffer[_pos]);
+    _pos += sizeof(T);      // 자리는 소비했지만 값은 아직 안 씀
+    return ret;             // 나중에 채울 수 있게 포인터를 돌려준다
+}</code></pre>
+
+    <div class="cmp before-after">
+      <div>
+        <h4>Before — 손계산</h4>
+        <pre><code class="language-cpp">((PacketHeader*)buffer)-&gt;size = ...;
+((PacketHeader*)buffer)-&gt;id = 1;
+::memcpy(&amp;buffer[4], sendData, ...);
+
+// 받는 쪽
+::memcpy(recvBuffer, &amp;buffer[4],
+    header.size - sizeof(PacketHeader)
+        - 8 - 4 - 2);   // ← 실제 코드</code></pre>
+      </div>
+      <div>
+        <h4>After — 커서가 관리</h4>
+        <pre><code class="language-cpp">BufferWriter bw(sendBuffer-&gt;Buffer(), 4096);
+
+PacketHeader* header = bw.Reserve&lt;PacketHeader&gt;();
+bw &lt;&lt; (uint64)1001 &lt;&lt; (uint32)100 &lt;&lt; (uint16)10;
+bw.Write(sendData, sizeof(sendData));
+
+header-&gt;size = bw.WriteSize();  // 마지막에 채움
+header-&gt;id = 1;
+sendBuffer-&gt;Close(bw.WriteSize());</code></pre>
+      </div>
+    </div>
+
+    <p>
+      Before 쪽의 <code>- 8 - 4 - 2</code>를 보세요. <code>uint64 id</code>, <code>uint32 hp</code>, <code>uint16 attack</code>의
+      바이트 수를 사람이 뺀 겁니다. 필드 하나만 추가돼도 조용히 틀리는 코드입니다.
+      After에서는 <code>br &gt;&gt; id &gt;&gt; hp &gt;&gt; attack</code>이 알아서 커서를 옮기므로 이 뺄셈 자체가 사라집니다.
+    </p>
+
+    <div class="concept warn">
+      <h2>주의 — 이 시점의 <code>operator&gt;&gt;</code>는 <em>순서 규약</em>일 뿐</h2>
+      <p>
+        <code>BufferWriter</code>가 쓴 순서와 <code>BufferReader</code>가 읽는 순서가 <strong>정확히 같아야만</strong> 동작합니다.
+        컴파일러가 검사해주지 않습니다. “쓰는 쪽 3줄, 읽는 쪽 3줄”을 사람이 동기화하는 구조 — 이게 Stage 5의 동기입니다.
+      </p>
+    </div>
+    <p class="fignote">이 단계의 더 자세한 비교는 <a href="buffer-reader-writer-git-comparison.html">BufferReader / BufferWriter 추가 분석</a>에 있습니다.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="stage">
+    <span class="stage-tag">Stage 3 · 78d6e9a</span>
+    <h2>패킷 핸들러 생성 — 만드는 곳과 읽는 곳을 짝으로 묶기</h2>
+
+    <div class="qa">
+      <p class="q">문제 — 직렬화 코드가 <code>main()</code>과 <code>GameSession</code> 안에 흩어져 있다. 패킷이 10종류가 되면?</p>
+      <p class="a">해결 — 패킷마다 <code>Make_XXX</code>(쓰기) / <code>Handle_XXX</code>(읽기) 함수 한 쌍으로 고정.</p>
+    </div>
+
+    <pre><code class="language-cpp">// GameServer/ServerPacketHandler.h
+enum { S_TEST = 1 };
+
+class ServerPacketHandler
+{
+public:
+    static void HandlePacket(BYTE* buffer, int32 len);   // id로 분기하는 라우터
+    static SendBufferRef Make_S_TEST(uint64 id, uint32 hp, uint16 attack,
+                                     vector&lt;BuffData&gt; buffs);
+};</code></pre>
+
+    <div class="diagram">
+      <p class="diagram-title">역할 분리 — 조립은 코어, 라우팅은 핸들러, 해석은 Handle_ 함수</p>
+      <div class="flow flow-wide">
+        <div class="node">PacketSession<br>OnRecv</div><span class="arrow">→</span>
+        <div class="node">GameSession<br>OnRecvPacket</div><span class="arrow">→</span>
+        <div class="node">HandlePacket<br>(switch id)</div><span class="arrow">→</span>
+        <div class="node server">Handle_S_TEST</div>
+      </div>
+    </div>
+
+    <pre><code class="language-cpp">// 라우터: 헤더만 훔쳐보고(Peek) id로 분기
+void ServerPacketHandler::HandlePacket(BYTE* buffer, int32 len)
+{
+    BufferReader br(buffer, len);
+
+    PacketHeader header;
+    br.Peek(&amp;header);       // Read와 달리 _pos를 전진시키지 않는다
+
+    switch (header.id)
+    {
+    default:
+        break;
+    }
+}</code></pre>
+    <p>
+      <code>Peek</code>이 필요한 이유가 여기서 드러납니다. 라우터는 <code>id</code>만 보고 넘길 뿐,
+      실제 파싱은 <code>Handle_XXX</code>가 <strong>버퍼 처음부터 다시</strong> 하기 때문입니다.
+    </p>
+
+    <h3>변화 ①: <code>OnRecvPacket</code>의 반환형이 <code>int32</code> → <code>void</code></h3>
+    <div class="cmp before-after">
+      <div>
+        <h4>71e7a86</h4>
+        <pre><code class="language-cpp">virtual int32 OnRecvPacket(BYTE*, int32 len)
+{
+    // ...
+    return len;   // 얼마 썼는지 보고
+}</code></pre>
+      </div>
+      <div>
+        <h4>78d6e9a</h4>
+        <pre><code class="language-cpp">virtual void OnRecvPacket(BYTE* buffer, int32 len)
+{
+    ServerPacketHandler::HandlePacket(buffer, len);
+}</code></pre>
+      </div>
+    </div>
+    <p>
+      <strong>왜 반환값이 필요 없어졌나?</strong> <code>PacketSession::OnRecv</code>가 이미 <code>header.size</code>를 읽어서
+      <code>processLen += header.size</code>로 전진하고 있기 때문입니다.
+      즉 “몇 바이트 소비했는지”는 조립부가 이미 아는 정보였고, 컨텐츠에게 물어볼 이유가 없었던 겁니다.
+      <code>sealed</code>/<code>abstract</code> 분리가 여기서 실제 이득으로 나타납니다.
+    </p>
+
+    <h3>변화 ②: 가변 개수 데이터 — 리스트</h3>
+    <p>
+      고정 필드(<code>id</code>, <code>hp</code>, <code>attack</code>)와 달리 버프 목록은 <strong>개수가 매번 다릅니다</strong>.
+      바이트 스트림에는 “여기서 끝”이란 표시가 없으므로, <strong>개수를 먼저 적어두는</strong> 방식을 씁니다.
+    </p>
+    <div class="cmp">
+      <div>
+        <h4>쓰기 (Make_S_TEST)</h4>
+        <pre><code class="language-cpp">bw &lt;&lt; id &lt;&lt; hp &lt;&lt; attack;
+
+bw &lt;&lt; (uint16)buffs.size();   // 개수 먼저
+
+for (BuffData&amp; buff : buffs)
+    bw &lt;&lt; buff.buffid &lt;&lt; buff.remainTime;</code></pre>
+      </div>
+      <div>
+        <h4>읽기 (Handle_S_TEST)</h4>
+        <pre><code class="language-cpp">br &gt;&gt; id &gt;&gt; hp &gt;&gt; attack;
+
+uint16 buffCount;
+br &gt;&gt; buffCount;              // 개수 먼저
+
+buffs.resize(buffCount);
+for (int32 i = 0; i &lt; buffCount; i++)
+    br &gt;&gt; buffs[i].buffid &gt;&gt; buffs[i].remainTime;</code></pre>
+      </div>
+    </div>
+
+    <h3>변화 ③: <code>BufferWriter::operator&lt;&lt;</code> 오버로드 정리</h3>
+    <pre><code class="language-cpp">// 제거됨: const T&amp; 버전
+// template&lt;typename T&gt; BufferWriter&amp; operator&lt;&lt;(const T&amp; src);
+
+// 남은 것: 포워딩 레퍼런스 하나로 통합
+template&lt;typename T&gt;
+BufferWriter&amp; BufferWriter::operator&lt;&lt;(T&amp;&amp; src)
+{
+    using DataType = std::remove_reference_t&lt;T&gt;;
+    *reinterpret_cast&lt;DataType*&gt;(&amp;_buffer[_pos]) = std::forward&lt;DataType&gt;(src);
+    _pos += sizeof(T);
+    return *this;
+}</code></pre>
+    <p>
+      두 오버로드가 공존하면 <code>bw &lt;&lt; buff.buffid</code>(좌변값)에서 어느 쪽을 부를지 모호해집니다.
+      <code>T&amp;&amp;</code>는 템플릿 문맥에서 <strong>포워딩 레퍼런스</strong>라 좌변값·우변값을 모두 받으므로 하나로 충분합니다.
+      다만 <code>T</code>가 <code>uint64&amp;</code>처럼 추론될 수 있어 <code>remove_reference_t</code>로 벗겨낸 뒤 캐스팅합니다.
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="stage">
+    <span class="stage-tag">Stage 4 · f77cfdc</span>
+    <h2>인코딩 설정하여 문자열 보내기</h2>
+
+    <div class="qa">
+      <p class="q">문제 — 문자열은 길이가 매번 다르고, 한글은 1바이트가 아니다.</p>
+      <p class="a">해결 — <strong>길이(글자 수)를 먼저 쓰고</strong>, <code>WCHAR</code>(2바이트) 단위로 그대로 복사한다.</p>
+    </div>
+
+    <div class="cmp">
+      <div>
+        <h4>서버 — 쓰기</h4>
+        <pre><code class="language-cpp">bw &lt;&lt; (uint16)name.size();          // 글자 수
+bw.Write((void*)name.data(),
+         name.size() * sizeof(WCHAR)); // 바이트 수</code></pre>
+      </div>
+      <div>
+        <h4>클라이언트 — 읽기</h4>
+        <pre><code class="language-cpp">wstring name;
+uint16 nameLen;
+br &gt;&gt; nameLen;
+name.resize(nameLen);
+br.Read((void*)name.data(),
+        nameLen * sizeof(WCHAR));
+
+wcout.imbue(std::locale("kor"));
+wcout &lt;&lt; name &lt;&lt; endl;</code></pre>
+      </div>
+    </div>
+
+    <table>
+      <thead><tr><th>포인트</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>uint16</code> 길이 접두</td>
+          <td>널 종료(<code>\0</code>)에 의존하지 않습니다. 문자열 중간에 널이 있어도 안전하고, 읽는 쪽이 정확히 몇 바이트 읽을지 미리 알 수 있습니다.</td>
+        </tr>
+        <tr>
+          <td><code>size()</code> vs <code>* sizeof(WCHAR)</code></td>
+          <td>기록하는 건 <strong>글자 수</strong>, 실제 복사하는 건 <strong>바이트 수</strong>. <code>L"안녕하세요."</code>는 6글자 = 12바이트입니다. 여기서 <code>*2</code>를 빠뜨리는 게 흔한 실수입니다.</td>
+        </tr>
+        <tr>
+          <td><code>char</code> → <code>WCHAR</code></td>
+          <td><code>char sendData[1000] = "Hello World"</code>가 <code>WCHAR sendData[1000] = L"가"</code>로 바뀝니다. 한글은 <code>char</code> 한 칸에 안 들어갑니다.</td>
+        </tr>
+        <tr>
+          <td><code>wcout.imbue(locale("kor"))</code></td>
+          <td>패킷이 아니라 <strong>콘솔 출력</strong>의 문제입니다. 기본 <code>wcout</code>은 비ASCII를 만나면 스트림이 실패 상태로 빠져 아무것도 안 찍힙니다. 로케일을 지정해야 한글이 보입니다.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="fignote">
+      참고: 문자열 필드는 이후 Stage 5의 <code>#pragma pack</code> 구조체로 넘어가면서 예제에서 잠시 빠집니다.
+      가변 길이라 고정 크기 구조체에 담기지 않기 때문인데, 이 문제를 offset/count 방식으로 다시 푸는 게 Stage 5~7의 리스트입니다.
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="stage">
+    <span class="stage-tag">Stage 5 · 747a555</span>
+    <h2>패킷 직렬화 — <code>#pragma pack</code> 방식</h2>
+
+    <div class="qa">
+      <p class="q">문제 — 쓰는 쪽 <code>bw &lt;&lt; a &lt;&lt; b &lt;&lt; c</code>와 읽는 쪽 <code>br &gt;&gt; a &gt;&gt; b &gt;&gt; c</code>를 사람이 동기화해야 한다.</p>
+      <p class="a">해결 — 패킷 모양을 <strong>구조체 하나로 선언</strong>하고, 바이트 배열을 그 구조체로 통째로 본다.</p>
+    </div>
+
+    <pre><code class="language-cpp">// DummyClient/ClientPacketHandler.cpp
+#pragma pack(1)
+struct PKT_S_TEST
+{
+    struct BuffsListItem
+    {
+        uint64 buffid;
+        float  remainTime;
+    };
+
+    uint16 packetSize;   // 공용 헤더
+    uint16 packetId;     // 공용 헤더
+    uint64 id;
+    uint32 hp;
+    uint16 attack;
+
+    uint16 buffsOffset;  // 리스트가 시작되는 위치
+    uint16 buffsCount;   // 리스트 항목 개수
+};
+#pragma pack()</code></pre>
+
+    <h3>왜 <code>#pragma pack(1)</code>이 반드시 필요한가</h3>
+    <p>
+      C++ 컴파일러는 CPU 접근 효율을 위해 구조체 멤버 사이에 <strong>패딩</strong>을 끼워 넣습니다.
+      메모리 안에서는 문제없지만, <strong>네트워크로 나가는 바이트 배열</strong>에서는 이 패딩이 그대로 “유령 바이트”가 됩니다.
+      송신·수신 컴파일러 설정이 조금만 달라도 필드가 어긋납니다.
+    </p>
+
+    <div class="diagram">
+      <p class="diagram-title"><code>PKT_S_TEST</code> 메모리 배치 — 패딩 있음 vs 없음</p>
+      <svg class="figure" viewBox="0 0 880 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="pragma pack 적용 전후 구조체 메모리 배치 비교">
+        <defs>
+          <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="8" height="8" fill="#fee2e2"/>
+            <line x1="0" y1="0" x2="0" y2="8" stroke="#dc2626" stroke-width="3"/>
+          </pattern>
+        </defs>
+
+        <!-- 눈금 (26px = 1 byte) -->
+        <g font-family="Consolas, monospace" font-size="10" fill="#94a3b8" text-anchor="middle">
+          <text x="20" y="24">0</text><text x="124" y="24">4</text><text x="228" y="24">8</text>
+          <text x="332" y="24">12</text><text x="436" y="24">16</text><text x="540" y="24">20</text>
+          <text x="644" y="24">24</text><text x="748" y="24">28</text><text x="852" y="24">32</text>
+        </g>
+
+        <!-- Row A: pack(1) -->
+        <text x="20" y="48" font-family="Segoe UI, sans-serif" font-size="13" font-weight="700" fill="#166534">#pragma pack(1) — 22 bytes</text>
+        <g stroke="#166534" stroke-width="1">
+          <rect x="20"  y="58" width="52"  height="34" fill="#dcfce7"/>
+          <rect x="72"  y="58" width="52"  height="34" fill="#dcfce7"/>
+          <rect x="124" y="58" width="208" height="34" fill="#bbf7d0"/>
+          <rect x="332" y="58" width="104" height="34" fill="#dcfce7"/>
+          <rect x="436" y="58" width="52"  height="34" fill="#bbf7d0"/>
+          <rect x="488" y="58" width="52"  height="34" fill="#dcfce7"/>
+          <rect x="540" y="58" width="52"  height="34" fill="#bbf7d0"/>
+        </g>
+        <g font-family="Consolas, monospace" font-size="10" fill="#14532d" text-anchor="middle">
+          <text x="46" y="80">size</text><text x="98" y="80">pktId</text>
+          <text x="228" y="80" font-size="11">id (uint64)</text>
+          <text x="384" y="80" font-size="11">hp</text><text x="462" y="80">atk</text>
+          <text x="514" y="80">bOff</text><text x="566" y="80">bCnt</text>
+        </g>
+        <text x="600" y="80" font-family="Segoe UI, sans-serif" font-size="11" font-weight="700" fill="#166534">← 끝 (22)</text>
+
+        <!-- Row B: default -->
+        <text x="20" y="128" font-family="Segoe UI, sans-serif" font-size="13" font-weight="700" fill="#991b1b">기본 정렬 — 32 bytes (패딩 10 bytes)</text>
+        <g stroke="#991b1b" stroke-width="1">
+          <rect x="20"  y="138" width="52"  height="34" fill="#fee2e2"/>
+          <rect x="72"  y="138" width="52"  height="34" fill="#fee2e2"/>
+          <rect x="124" y="138" width="104" height="34" fill="url(#hatch)"/>
+          <rect x="228" y="138" width="208" height="34" fill="#fecaca"/>
+          <rect x="436" y="138" width="104" height="34" fill="#fee2e2"/>
+          <rect x="540" y="138" width="52"  height="34" fill="#fecaca"/>
+          <rect x="592" y="138" width="52"  height="34" fill="#fee2e2"/>
+          <rect x="644" y="138" width="52"  height="34" fill="#fecaca"/>
+          <rect x="696" y="138" width="156" height="34" fill="url(#hatch)"/>
+        </g>
+        <g font-family="Consolas, monospace" font-size="10" fill="#7f1d1d" text-anchor="middle">
+          <text x="46" y="160">size</text><text x="98" y="160">pktId</text>
+          <text x="176" y="160" font-weight="700" fill="#991b1b">PAD 4</text>
+          <text x="332" y="160" font-size="11">id (uint64)</text>
+          <text x="488" y="160" font-size="11">hp</text><text x="566" y="160">atk</text>
+          <text x="618" y="160">bOff</text><text x="670" y="160">bCnt</text>
+          <text x="774" y="160" font-weight="700" fill="#991b1b">꼬리 PAD 6</text>
+        </g>
+        <text x="20" y="196" font-family="Segoe UI, sans-serif" font-size="11.5" fill="#991b1b">빗금 = 컴파일러가 끼워 넣은 패딩. 같은 필드인데 <tspan font-family="Consolas, monospace">id</tspan>가 오프셋 4가 아니라 8에서 시작한다.</text>
+      </svg>
+      <p class="fignote">
+        기본 정렬에서는 <code>uint64 id</code>가 8의 배수 위치에 놓여야 해서 오프셋 4~7에 <strong>패딩 4바이트</strong>가 들어가고,
+        구조체 전체 크기도 8의 배수(32)로 올림되며 <strong>꼬리 패딩 6바이트</strong>가 붙습니다.
+        서버가 <code>bw &lt;&lt; id &lt;&lt; hp &lt;&lt; attack</code>으로 빈틈없이 22바이트를 썼는데
+        클라이언트가 32바이트 구조체로 읽으면 <code>id</code>부터 전부 어긋납니다.
+      </p>
+    </div>
+
+    <h3>리스트를 <code>offset</code> + <code>count</code>로 표현</h3>
+    <p>
+      Stage 3에서는 “개수 → 항목들” 순으로 흘려 썼습니다. 그런데 구조체 통짜 매핑을 하려면
+      <strong>고정 크기 부분</strong>과 <strong>가변 크기 부분</strong>을 분리해야 합니다.
+      그래서 고정 부분에는 “리스트가 <em>어디에</em> <em>몇 개</em> 있다”만 적고, 실제 데이터는 뒤에 붙입니다.
+    </p>
+    <pre><code class="language-cpp">// GameServer/ServerPacketHandler.cpp
+struct ListHeader
+{
+    uint16 offset;
+    uint16 count;
+};
+
+ListHeader* buffsHeader = bw.Reserve&lt;ListHeader&gt;();
+
+buffsHeader-&gt;offset = bw.WriteSize();   // 리스트가 시작될 위치
+buffsHeader-&gt;count  = buffs.size();
+
+for (BuffData&amp; buff : buffs)
+    bw &lt;&lt; buff.buffid &lt;&lt; buff.remainTime;</code></pre>
+
+    <h3><code>Validate()</code> — 네트워크 입력은 믿을 수 없다</h3>
+    <pre><code class="language-cpp">bool Validate()
+{
+    uint32 size = 0;
+    size += sizeof(PKT_S_TEST);
+    size += buffsCount * sizeof(BuffsListItem);
+    if (size != packetSize)                 // ① 크기 총합이 맞는가
+        return false;
+
+    if (buffsOffset + buffsCount * sizeof(BuffsListItem) &gt; packetSize)
+        return false;                       // ② 리스트가 패킷 밖으로 나가지 않는가
+
+    return true;
+}</code></pre>
+    <p>
+      구조체를 그대로 얹는 방식의 대가입니다. <code>buffsCount</code>에 <code>65535</code>가 박힌 조작된 패킷이 오면
+      검증 없이는 그대로 메모리 밖을 읽습니다. <strong>“구조체로 보기 전에 반드시 검증”</strong>이 규칙이 됩니다.
+    </p>
+
+    <h3>이 커밋에 남은 문제 — 오프셋이 어긋난다</h3>
+    <pre><code class="language-cpp">// 747a555 시점의 Handle_S_TEST
+PKT_S_TEST pkt;
+br &gt;&gt; pkt;                      // _pos: 0 → 22 (구조체 전체를 복사해 읽음)
+
+uint64 id;  uint32 hp;  uint16 attack;
+br &gt;&gt; id &gt;&gt; hp &gt;&gt; attack;      // ← Stage 3의 잔재! _pos: 22 → 36
+
+vector&lt;PKT_S_TEST::BuffsListItem&gt; buffs;
+buffs.resize(pkt.buffsCount);
+for (int32 i = 0; i &lt; pkt.buffsCount; i++)
+    br &gt;&gt; buffs[i];             // _pos=36부터 읽는다. 하지만 리스트는 22부터 시작</code></pre>
+    <p>
+      구조체 방식으로 바꾸면서 <code>id/hp/attack</code>은 이미 <code>pkt</code> 안에 들어왔는데,
+      이전 방식의 <code>br &gt;&gt; id &gt;&gt; hp &gt;&gt; attack</code> 세 줄이 그대로 남았습니다.
+      커서가 <strong>14바이트 앞질러</strong> 리스트를 읽게 되고, <code>buffsOffset</code>은 계산해놓고 <strong>쓰이지도 않습니다</strong>.
+    </p>
+    <div class="concept warn">
+      <h2>여기서 얻는 교훈</h2>
+      <p>
+        <code>br &gt;&gt;</code>로 읽는 방식과 구조체로 보는 방식을 <strong>섞으면</strong> 커서 위치가 이중 관리됩니다.
+        “구조체로 볼 거면 커서를 아예 쓰지 말자” — 이게 Stage 6의 답입니다.
+      </p>
+    </div>
+
+    <h3>그리고 <code>PDL.xml</code>이 처음 등장한다</h3>
+    <pre><code class="language-cpp">&lt;PDL&gt;
+    &lt;Packet name="S_TEST" desc="테스트용도"&gt;
+        &lt;Field name="id"     type="uint64" desc=""/&gt;
+        &lt;Field name="hp"     type="uint32" desc=""/&gt;
+        &lt;Field name="attack" type="uint16" desc=""/&gt;
+        &lt;List name="buffs" desc=""&gt;
+            &lt;Field name="buffId"     type="uint64" desc=""/&gt;
+            &lt;Field name="remainTime" type="float"  desc=""/&gt;
+        &lt;/List&gt;
+    &lt;/Packet&gt;
+&lt;/PDL&gt;</code></pre>
+    <p>
+      아직 아무 코드도 생성하지 않는 <strong>설계 문서</strong>입니다. 하지만 이게 왜 나왔는지는 명확합니다 —
+      <code>PKT_S_TEST</code>(읽기용)와 <code>Make_S_TEST</code>(쓰기용)가 <strong>같은 정보를 두 벌로</strong> 들고 있기 때문입니다.
+      한쪽만 고치면 조용히 깨집니다. 결국 “한 곳에 정의하고 양쪽 코드를 생성하자”가 최종 목표입니다.
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="stage">
+    <span class="stage-tag">Stage 6 · 62b9d7a</span>
+    <h2>패킷 직렬화 개선 — 복사를 없애고, 리스트를 객체로</h2>
+
+    <div class="qa">
+      <p class="q">문제 — 이미 메모리에 원하는 모양대로 들어와 있는데 왜 또 복사해서 읽는가?</p>
+      <p class="a">해결 — 수신 버퍼 포인터를 <strong>그대로</strong> 구조체 포인터로 캐스팅한다. 복사 0회.</p>
+    </div>
+
+    <div class="cmp before-after">
+      <div>
+        <h4>747a555 — 복사 + 커서</h4>
+        <pre><code class="language-cpp">if (len &lt; sizeof(PKT_S_TEST))
+    return;
+
+PKT_S_TEST pkt;
+br &gt;&gt; pkt;              // 22바이트 복사
+
+if (pkt.Validate() == false)
+    return;
+
+br &gt;&gt; id &gt;&gt; hp &gt;&gt; attack;   // 잔재
+
+vector&lt;BuffsListItem&gt; buffs;
+buffs.resize(pkt.buffsCount);
+for (int32 i = 0; i &lt; pkt.buffsCount; i++)
+    br &gt;&gt; buffs[i];     // 또 복사</code></pre>
+      </div>
+      <div>
+        <h4>62b9d7a — 제자리에서 보기</h4>
+        <pre><code class="language-cpp">PKT_S_TEST* pkt =
+    reinterpret_cast&lt;PKT_S_TEST*&gt;(buffer);
+
+if (pkt-&gt;Validate() == false)
+    return;
+
+PKT_S_TEST::BuffsList buffs
+    = pkt-&gt;GetBuffsList();
+
+cout &lt;&lt; "BufCount : " &lt;&lt; buffs.Count() &lt;&lt; endl;
+for (int32 i = 0; i &lt; buffs.Count(); i++)
+    cout &lt;&lt; buffs[i].buffid &lt;&lt; " "
+         &lt;&lt; buffs[i].remainTime &lt;&lt; endl;</code></pre>
+      </div>
+    </div>
+
+    <p>
+      <code>BufferReader</code>가 사라진 게 아니라 <strong>필요가 없어진</strong> 겁니다.
+      커서 이동, 복사, <code>vector</code> 할당이 전부 사라지고 <code>buffer</code>를 가리키는 포인터 하나만 남습니다.
+      브로드캐스트로 초당 수천 개 패킷을 파싱하는 상황에서 이 차이는 큽니다.
+    </p>
+
+    <h3><code>GetBuffsList()</code> — offset이 드디어 쓰인다</h3>
+    <pre><code class="language-cpp">using BuffsList = PacketList&lt;PKT_S_TEST::BuffsListItem&gt;;
+
+BuffsList GetBuffsList()
+{
+    BYTE* data = reinterpret_cast&lt;BYTE*&gt;(this);   // 패킷 시작 주소
+    data += buffsOffset;                          // 리스트 시작 주소
+    return BuffsList(reinterpret_cast&lt;PKT_S_TEST::BuffsListItem*&gt;(data), buffsCount);
+}</code></pre>
+    <p>
+      기준점이 <code>this</code>, 즉 <strong>패킷 자신의 시작 주소</strong>라는 게 중요합니다.
+      버퍼 어디에 놓여 있든 상대 위치만 맞으면 동작합니다.
+    </p>
+
+    <h3><code>PacketList</code> / <code>PacketIterator</code> — 소유하지 않는 뷰</h3>
+    <pre><code class="language-cpp">// DummyClient/ClientPacketHandler.h
+template&lt;typename T&gt;
+class PacketList
+{
+public:
+    PacketList() : _data(nullptr), _count(0) {}
+    PacketList(T* data, uint16 count) : _data(data), _count(count) {}
+
+    T&amp; operator[](uint16 index)
+    {
+        ASSERT_CRASH(index &lt; _count);   // 범위 밖 접근은 즉시 크래시
+        return _data[index];
+    }
+
+    uint16 Count() { return _count; }
+
+private:
+    T*     _data;    // 버퍼를 가리키기만 한다 (소유 X, 복사 X)
+    uint16 _count;
+};</code></pre>
+    <p>
+      <code>vector</code>와 결정적으로 다릅니다. <code>vector</code>는 메모리를 <strong>할당하고 복사</strong>하지만
+      <code>PacketList</code>는 <strong>수신 버퍼를 가리키기만</strong> 합니다.
+      대신 원본 버퍼가 살아 있는 동안에만 유효하다는 제약이 생깁니다 — 핸들러 안에서만 쓰는 게 원칙입니다.
+    </p>
+
+    <h3><code>Validate()</code>에 하한 검사 추가</h3>
+    <pre><code class="language-cpp">uint32 size = 0;
+size += sizeof(PKT_S_TEST);
+if (packetSize &lt; size)      // ← 추가됨
+    return false;
+
+size += buffsCount * sizeof(BuffsListItem);
+if (size != packetSize)
+    return false;</code></pre>
+    <p>
+      <code>packetSize</code>가 <code>22</code>보다 작은 패킷이 오면 고정 필드조차 다 안 온 것이므로,
+      구조체로 읽는 순간 이미 버퍼 밖입니다. 이 한 줄이 그걸 막습니다.
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="stage">
+    <span class="stage-tag local">Stage 7 · 현재 로컬 (커밋 전)</span>
+    <h2>중첩 리스트 + 쓰기 전용 빌더</h2>
+
+    <div class="qa">
+      <p class="q">문제 — 버프마다 “영향을 받은 대상 목록(victims)”이 붙는다. <strong>리스트 안의 리스트</strong>는 어떻게 담나?</p>
+      <p class="a">해결 — 같은 <code>offset</code>/<code>count</code> 패턴을 <strong>한 단계 더</strong> 적용한다. 그래서 offset이 꼭 필요했던 것.</p>
+    </div>
+
+    <p><code>PDL.xml</code>도 같이 자랐습니다.</p>
+    <pre><code class="language-cpp">&lt;List name="buffs" desc=""&gt;
+    &lt;Field name="buffId"     type="uint64" desc=""/&gt;
+    &lt;Field name="remainTime" type="float"  desc=""/&gt;
+    &lt;List name="victims"&gt;                          &lt;!-- 리스트 안의 리스트 --&gt;
+        &lt;Field name="userId" type="uint64" desc=""/&gt;
+    &lt;/List&gt;
+&lt;/List&gt;</code></pre>
+
+    <h3>왜 <code>offset</code>이 없으면 안 되는가</h3>
+    <p>
+      버프가 3개고 각 버프의 victims 개수가 3/1/2로 다릅니다.
+      즉 <strong>버프 항목의 실제 데이터 길이가 제각각</strong>입니다.
+      “버프 <code>i</code>의 victims는 어디부터?”를 계산으로 구하려면 앞의 모든 버프를 훑어야 합니다.
+      각 항목이 자기 데이터 위치를 <code>victimsOffset</code>으로 <strong>직접 들고 있으면</strong> 한 번에 점프할 수 있습니다.
+    </p>
+
+    <pre><code class="language-cpp">struct BuffsListItem
+{
+    uint64 buffid;
+    float  remainTime;
+
+    uint16 victimsOffset;   // 패킷 시작 기준 위치
+    uint16 victimsCount;
+};</code></pre>
+
+    <div class="diagram">
+      <p class="diagram-title">현재 코드가 실제로 만드는 패킷 — 총 118바이트</p>
+      <svg class="figure" viewBox="0 0 920 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="118바이트 패킷의 실제 메모리 배치와 오프셋 참조 관계">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#b45309"/>
+          </marker>
+        </defs>
+
+        <!-- 오프셋 참조 화살표 -->
+        <g fill="none" stroke="#b45309" stroke-width="1.6" marker-end="url(#ah)">
+          <path d="M161,178 Q172,142 184,172"/>
+          <path d="M277,178 Q410,60  542,172"/>
+          <path d="M396,178 Q558,86  721,172"/>
+          <path d="M515,178 Q648,114 781,172"/>
+        </g>
+        <!-- 라벨 → 해당 화살표 연결선 -->
+        <g stroke="#b45309" stroke-width="0.9" stroke-dasharray="2 2" opacity="0.75">
+          <line x1="242" y1="144" x2="176" y2="156"/>
+          <line x1="440" y1="60"  x2="411" y2="114"/>
+          <line x1="600" y1="86"  x2="559" y2="127"/>
+          <line x1="694" y1="114" x2="649" y2="141"/>
+        </g>
+        <g font-family="Consolas, monospace" font-size="10.5" fill="#b45309">
+          <text x="196" y="140">buffsOffset = 22</text>
+          <text x="360" y="56">buff[0].victimsOffset = 70</text>
+          <text x="520" y="82">buff[1].victimsOffset = 94</text>
+          <text x="612" y="110">buff[2].victimsOffset = 102</text>
+        </g>
+
+        <!-- 본체 바 -->
+        <g stroke="#334155" stroke-width="1">
+          <rect x="20"  y="180" width="164" height="44" fill="#dbeafe"/>
+          <rect x="184" y="180" width="120" height="44" fill="#dcfce7"/>
+          <rect x="304" y="180" width="119" height="44" fill="#bbf7d0"/>
+          <rect x="423" y="180" width="119" height="44" fill="#dcfce7"/>
+          <rect x="542" y="180" width="179" height="44" fill="#fed7aa"/>
+          <rect x="721" y="180" width="60"  height="44" fill="#fdba74"/>
+          <rect x="781" y="180" width="119" height="44" fill="#fed7aa"/>
+        </g>
+
+        <!-- 오프셋 필드 위치 강조 (헤더 안 buffsOffset, 각 buff 안 victimsOffset) -->
+        <g fill="none" stroke="#b45309" stroke-width="1.5" stroke-dasharray="3 2">
+          <rect x="154" y="181" width="15" height="42"/>
+          <rect x="274" y="181" width="15" height="42"/>
+          <rect x="393" y="181" width="15" height="42"/>
+          <rect x="512" y="181" width="15" height="42"/>
+        </g>
+
+        <!-- 라벨 -->
+        <g font-family="Segoe UI, sans-serif" font-size="11.5" font-weight="700" text-anchor="middle">
+          <text x="102" y="200" fill="#1e3a8a">PKT_S_TEST</text>
+          <text x="102" y="215" fill="#1e3a8a" font-weight="400" font-size="10.5">고정 22B</text>
+          <text x="244" y="200" fill="#14532d">buff[0]</text>
+          <text x="244" y="215" fill="#14532d" font-weight="400" font-size="10.5">16B</text>
+          <text x="363" y="200" fill="#14532d">buff[1]</text>
+          <text x="363" y="215" fill="#14532d" font-weight="400" font-size="10.5">16B</text>
+          <text x="482" y="200" fill="#14532d">buff[2]</text>
+          <text x="482" y="215" fill="#14532d" font-weight="400" font-size="10.5">16B</text>
+          <text x="631" y="200" fill="#7c2d12">victims[0] × 3</text>
+          <text x="631" y="215" fill="#7c2d12" font-weight="400" font-size="10.5">24B</text>
+          <text x="751" y="200" fill="#7c2d12" font-size="10">v[1]×1</text>
+          <text x="751" y="215" fill="#7c2d12" font-weight="400" font-size="9.5">8B</text>
+          <text x="840" y="200" fill="#7c2d12">victims[2] × 2</text>
+          <text x="840" y="215" fill="#7c2d12" font-weight="400" font-size="10.5">16B</text>
+        </g>
+
+        <!-- 눈금 -->
+        <g stroke="#94a3b8" stroke-width="1">
+          <line x1="20" y1="228" x2="20" y2="238"/><line x1="184" y1="228" x2="184" y2="238"/>
+          <line x1="304" y1="228" x2="304" y2="238"/><line x1="423" y1="228" x2="423" y2="238"/>
+          <line x1="542" y1="228" x2="542" y2="238"/><line x1="721" y1="228" x2="721" y2="238"/>
+          <line x1="781" y1="228" x2="781" y2="238"/><line x1="900" y1="228" x2="900" y2="238"/>
+        </g>
+        <g font-family="Consolas, monospace" font-size="11" fill="#475569" text-anchor="middle">
+          <text x="20" y="252">0</text><text x="184" y="252">22</text><text x="304" y="252">38</text>
+          <text x="423" y="252">54</text><text x="542" y="252">70</text><text x="721" y="252">94</text>
+          <text x="781" y="252">102</text><text x="900" y="252">118</text>
+        </g>
+
+        <text x="20" y="284" font-family="Segoe UI, sans-serif" font-size="12" fill="#475569">
+          점선 사각형 = offset 필드가 저장된 자리 · 주황 화살표 = 그 offset이 가리키는 곳
+        </text>
+      </svg>
+      <p class="fignote">
+        모든 <code>offset</code>은 <strong>패킷 시작(0)을 기준</strong>으로 한 절대 위치입니다.
+        <code>PKT_S_TEST</code> 22B + <code>BuffsListItem</code> 16B×3 + victims 8B×(3+1+2) = <strong>118B</strong>.
+      </p>
+    </div>
+
+    <h3>재귀적 <code>Validate()</code></h3>
+    <p>중첩이 생기면서 검증도 한 단계 깊어집니다. 항목마다 자기 하위 리스트를 검사하고, <strong>누적 크기를 밖으로 넘깁니다</strong>.</p>
+    <pre><code class="language-cpp">// BuffsListItem 안
+bool Validate(BYTE* packetStart, uint16 packetSize, OUT uint32&amp; size)
+{
+    if (victimsOffset + victimsCount * sizeof(uint64) &gt; packetSize)
+        return false;                       // 내 victims가 패킷 밖으로 안 나가는가
+
+    size += victimsCount * sizeof(uint64);  // 누적 크기에 더한다
+    return true;
+}
+
+// PKT_S_TEST 안
+bool Validate()
+{
+    uint32 size = 0;
+    size += sizeof(PKT_S_TEST);
+    if (packetSize &lt; size)
+        return false;
+
+    if (buffsOffset + buffsCount * sizeof(BuffsListItem) &gt; packetSize)
+        return false;
+
+    // buffs 자체 크기 추가
+    size += buffsCount * sizeof(BuffsListItem);
+
+    BuffsList buffList = GetBuffsList();
+    for (int32 i = 0; i &lt; buffList.Count(); i++)
+    {
+        if (buffList[i].Validate((BYTE*)this, packetSize, OUT size) == false)
+            return false;
+    }
+
+    // 최종 크기 비교
+    if (size != packetSize)
+        return false;
+
+    return true;
+}</code></pre>
+    <p>
+      마지막 <code>size != packetSize</code>가 강력합니다. <strong>모든 조각의 합이 정확히 패킷 크기와 같아야</strong> 통과하므로,
+      빈틈이나 겹침이 있는 조작된 패킷은 걸러집니다.
+      위 118바이트 예제라면 <code>22 → 70 → 94 → 102 → 118</code>로 누적되어 <code>packetSize</code>와 일치합니다.
+    </p>
+    <p class="fignote">
+      참고로 <code>Validate()</code>가 자기 아래 정의된 <code>BuffsList</code>/<code>GetBuffsList()</code>를 쓸 수 있는 건,
+      클래스 안 멤버 함수 본문은 <em>클래스 전체가 완성된 뒤</em>에 해석되기 때문입니다(complete-class context).
+    </p>
+
+    <h3>쓰는 쪽도 구조체 방식으로 — <code>PKT_S_TEST_WRITE</code></h3>
+    <p>
+      이제 읽는 쪽만 구조체를 쓰고 쓰는 쪽은 <code>bw &lt;&lt; a &lt;&lt; b</code>인 <strong>비대칭</strong>이 남았습니다.
+      게다가 중첩 리스트는 offset을 나중에 채워야 해서 흘려쓰기로는 표현이 어렵습니다.
+      그래서 <code>Make_S_TEST</code>가 통째로 삭제되고 <strong>빌더 객체</strong>가 들어왔습니다.
+    </p>
+    <pre><code class="language-cpp">// GameServer/ServerPacketHandler.h
+struct PKT_S_TEST_WRITE
+{
+    PKT_S_TEST_WRITE(uint64 id, uint32 hp, uint16 attack)
+    {
+        _sendBuffer = GSendBufferManager-&gt;Open(4096);
+        _bw = BufferWriter(_sendBuffer-&gt;Buffer(), _sendBuffer-&gt;AllocSize());
+
+        _pkt = _bw.Reserve&lt;PKT_S_TEST&gt;();     // 고정부 자리 예약
+        _pkt-&gt;packetSize = 0;    // To Fill
+        _pkt-&gt;packetId = S_TEST;
+        _pkt-&gt;id = id;
+        _pkt-&gt;hp = hp;
+        _pkt-&gt;attack = attack;
+        _pkt-&gt;buffsOffset = 0;   // To Fill
+        _pkt-&gt;buffsCount = 0;    // To Fill
+    }
+
+    BuffsList ReserveBuffsList(uint16 buffCount)
+    {
+        BuffsListItem* first = _bw.Reserve&lt;BuffsListItem&gt;(buffCount);
+        _pkt-&gt;buffsOffset = (uint64)first - (uint64)_pkt;   // 포인터 차이로 offset 계산
+        _pkt-&gt;buffsCount  = buffCount;
+        return BuffsList(first, buffCount);
+    }
+
+    BuffsVictimsList ReserveBuffsVictimsList(BuffsListItem* buffsItem, uint16 victimsCount)
+    {
+        uint64* first = _bw.Reserve&lt;uint64&gt;(victimsCount);
+        buffsItem-&gt;victimsOffset = (uint64)first - (uint64)_pkt;
+        buffsItem-&gt;victimsCount  = victimsCount;
+        return BuffsVictimsList(first, victimsCount);
+    }
+
+    SendBufferRef CloseAndReturn()
+    {
+        _pkt-&gt;packetSize = _bw.WriteSize();   // 마지막에 확정
+        _sendBuffer-&gt;Close(_bw.WriteSize());
+        return _sendBuffer;
+    }
+
+private:
+    PKT_S_TEST*   _pkt = nullptr;
+    SendBufferRef _sendBuffer;
+    BufferWriter  _bw;
+};</code></pre>
+
+    <p>이제 <code>GameServer.cpp</code>의 호출부가 “패킷을 조립한다”기보다 <strong>“객체를 채운다”</strong>에 가까워집니다.</p>
+    <pre><code class="language-cpp">// GameServer/GameServer.cpp
+PKT_S_TEST_WRITE pktWriter(1001, 100, 10);
+
+PKT_S_TEST_WRITE::BuffsList buffList = pktWriter.ReserveBuffsList(3);
+buffList[0] = { 100, 1.5f };
+buffList[1] = { 200, 2.3f };
+buffList[2] = { 300, 0.7f };
+
+PKT_S_TEST_WRITE::BuffsVictimsList vic0 = pktWriter.ReserveBuffsVictimsList(&amp;buffList[0], 3);
+{ vic0[0] = 1000; vic0[1] = 2000; vic0[2] = 3000; }
+
+PKT_S_TEST_WRITE::BuffsVictimsList vic1 = pktWriter.ReserveBuffsVictimsList(&amp;buffList[1], 1);
+{ vic1[0] = 1000; }
+
+PKT_S_TEST_WRITE::BuffsVictimsList vic2 = pktWriter.ReserveBuffsVictimsList(&amp;buffList[2], 2);
+{ vic2[0] = 3000; vic2[1] = 5000; }
+
+SendBufferRef sendBuffer = pktWriter.CloseAndReturn();</code></pre>
+
+    <p>
+      <code>PacketList</code>가 <strong>쓰기에도 그대로 재사용</strong>된다는 점이 깔끔합니다.
+      <code>buffList[0] = { 100, 1.5f }</code>는 <code>operator[]</code>가 참조를 돌려주므로
+      <strong>SendBuffer 메모리에 직접</strong> 쓰는 것입니다. 중간 <code>vector</code>가 없습니다.
+    </p>
+
+    <h3>이를 위해 바뀐 <code>BufferWriter::Reserve</code></h3>
+    <div class="cmp before-after">
+      <div>
+        <h4>Before — 1개만</h4>
+        <pre><code class="language-cpp">template&lt;typename T&gt;
+T* BufferWriter::Reserve()
+{
+    if (FreeSize() &lt; sizeof(T))
+        return nullptr;
+
+    T* ret = reinterpret_cast&lt;T*&gt;(&amp;_buffer[_pos]);
+    _pos += sizeof(T);
+    return ret;
+}</code></pre>
+      </div>
+      <div>
+        <h4>After — N개 연속</h4>
+        <pre><code class="language-cpp">template&lt;typename T&gt;
+T* BufferWriter::Reserve(uint16 count)   // 기본값 1
+{
+    if (FreeSize() &lt; (sizeof(T) * count))
+        return nullptr;
+
+    T* ret = reinterpret_cast&lt;T*&gt;(&amp;_buffer[_pos]);
+    _pos += (sizeof(T) * count);
+    return ret;
+}</code></pre>
+      </div>
+    </div>
+    <p>
+      배열 예약이 가능해지면서 “리스트 자리를 통째로 잡고 → 나중에 채운다”가 성립합니다.
+      기본 인자 <code>count = 1</code> 덕분에 기존 <code>Reserve&lt;PKT_S_TEST&gt;()</code> 호출은 그대로 동작합니다.
+    </p>
+
+    <h3>미묘한 개선 — offset의 기준점이 바뀌었다</h3>
+    <table>
+      <thead><tr><th>시점</th><th>코드</th><th>기준</th></tr></thead>
+      <tbody>
+        <tr><td>747a555</td><td><code>buffsHeader-&gt;offset = bw.WriteSize();</code></td><td><strong>버퍼</strong> 시작</td></tr>
+        <tr><td>현재</td><td><code>_pkt-&gt;buffsOffset = (uint64)first - (uint64)_pkt;</code></td><td><strong>패킷</strong> 시작</td></tr>
+      </tbody>
+    </table>
+    <p>
+      지금은 패킷이 <code>buffer[0]</code>에서 시작하므로 두 값이 같습니다. 하지만 읽는 쪽은
+      <code>data = (BYTE*)this; data += buffsOffset;</code> 즉 <strong>패킷 기준</strong>으로 해석합니다.
+      새 방식은 읽는 쪽 해석과 기준이 정확히 일치하므로, 나중에 한 버퍼에 패킷을 이어 붙이거나
+      오프셋을 두는 위치가 바뀌어도 깨지지 않습니다.
+    </p>
+  </section>
+
+  <!-- ============================================================ -->
+  <h2>지금 상태에서 알아둘 점</h2>
+
+  <section class="concept warn">
+    <h2>① 서버 쪽 <code>PacketList</code>의 <code>begin()/end()</code>가 아직 깨진 버전</h2>
+    <p>
+      <code>PacketIterator</code>/<code>PacketList</code>가 <code>ClientPacketHandler.h</code>와
+      <code>ServerPacketHandler.h</code>에 <strong>그대로 복사되어 두 벌</strong> 존재합니다.
+      클라이언트 쪽은 현재 로컬 작업에서 고쳤지만, 서버 쪽은 아직 깨진 상태입니다.
+    </p>
+    <p style="margin-bottom:4px"><strong>GameServer/ServerPacketHandler.h:44 — 현재 (깨진 상태)</strong></p>
+    <pre><code class="language-cpp">PacketIterator&lt;T, PacketList&lt;T&gt;&gt; begin() { return PacketIterator&lt;T, PacketList, T &gt;&gt; (*this, 0); }
+PacketIterator&lt;T, PacketList&lt;T&gt;&gt; end()   { return PacketIterator&lt;T, PacketList, T &gt;&gt; (*this, count); }</code></pre>
+
+    <p style="margin-bottom:4px"><strong>DummyClient/ClientPacketHandler.h:49 — 로컬에서 수정된 버전</strong></p>
+    <pre><code class="language-cpp">PacketIterator&lt;T, PacketList&lt;T&gt;&gt; begin() { return PacketIterator&lt;T, PacketList&lt;T&gt;&gt;(*this, 0); }
+PacketIterator&lt;T, PacketList&lt;T&gt;&gt; end()   { return PacketIterator&lt;T, PacketList&lt;T&gt;&gt;(*this, _count); }</code></pre>
+
+    <p>
+      두 군데가 틀렸습니다. 템플릿 인자가 <code>PacketList&lt;T&gt;</code>가 아니라
+      <code>PacketList, T &gt;&gt;</code>로 들어가 있고, <code>count</code>는 선언된 적 없는 이름입니다 (멤버는 <code>_count</code>).
+    </p>
+    <p>
+      <strong>그런데 왜 지금 빌드가 되나?</strong> 클래스 템플릿의 멤버 함수는 <strong>실제로 호출될 때만</strong> 인스턴스화되기 때문입니다.
+      서버 코드는 <code>buffList[0] = {...}</code>처럼 인덱스로만 접근하고 ranged-for를 쓰지 않아서
+      <code>begin()/end()</code>가 한 번도 인스턴스화되지 않습니다.
+      실제로 <code>Server.sln</code>을 Debug/x64로 빌드하면 <strong>세 프로젝트 모두 성공</strong>합니다.
+      <strong>서버에서 <code>for (auto&amp; b : buffList)</code>를 쓰는 순간</strong> 비로소 컴파일 에러가 납니다.
+    </p>
+    <p class="fignote">
+      커밋 기록도 같은 이야기를 합니다. <code>62b9d7a</code>는 이 깨진 <code>begin()/end()</code>를 그대로 커밋했는데,
+      당시 클라이언트도 <code>for (int32 i = 0; ...)</code> 인덱스 순회를 쓰고 있었습니다.
+      ranged-for 사용과 수정이 <strong>둘 다 현재 로컬 작업에서 처음</strong> 등장합니다 — 쓰는 순간 드러난 것입니다.
+    </p>
+  </section>
+
+  <section class="concept warn">
+    <h2>② <code>#pragma pack(1)</code> 범위가 <code>PKT_S_TEST_WRITE</code>까지 덮고 있음</h2>
+    <pre><code class="language-cpp">// GameServer/ServerPacketHandler.h
+#pragma pack(1)
+struct PKT_S_TEST { ... };          // ← 얘는 패킹이 필요함 (와이어 포맷)
+
+struct PKT_S_TEST_WRITE
+{
+    PKT_S_TEST*   _pkt;
+    SendBufferRef _sendBuffer;      // shared_ptr — 네트워크로 나가지 않는 객체
+    BufferWriter  _bw;
+};
+#pragma pack()                       // ← 여기서 닫힘 (line 138)</code></pre>
+    <p>
+      <code>PKT_S_TEST_WRITE</code>는 <strong>와이어 포맷이 아니라 헬퍼 객체</strong>입니다.
+      네트워크로 나가지 않으므로 패킹할 이유가 없고, <code>shared_ptr</code> 같은 객체를 1바이트 정렬로 두는 건
+      정렬 이점을 잃는 것 외에 좋을 게 없습니다.
+      <code>#pragma pack()</code>을 <code>PKT_S_TEST</code> 닫는 <code>};</code> 바로 뒤(현재 84~85행 사이)로 올리는 게 의도에 맞습니다.
+      참고로 클라이언트 쪽(<code>ClientPacketHandler.cpp</code>)은 이미 <code>PKT_S_TEST</code>만 감싸고 있습니다.
+    </p>
+  </section>
+
+  <section class="concept">
+    <h2>③ 자잘한 잔재</h2>
+    <ul>
+      <li><code>ClientPacketHandler.cpp</code>의 <code>Handle_S_TEST</code> 첫 줄 <code>BufferReader br(buffer, len);</code>은
+          이제 아무 데서도 쓰이지 않습니다 (제자리 캐스팅으로 전환하면서 남은 것).</li>
+      <li><code>BuffsListItem::Validate</code>의 <code>BYTE* packetStart</code> 매개변수도 함수 본문에서 쓰이지 않습니다.
+          하위 리스트가 더 깊어질 때를 대비한 자리로 보입니다.</li>
+      <li><code>ServerPacketHandler.h</code>의 <code>PKT_S_TEST</code>에는 <code>Validate()</code>가 없습니다.
+          서버는 이 패킷을 만들기만 하고 읽지 않으므로 지금은 문제없지만,
+          양방향이 되면 검증 로직도 두 벌 관리 대상이 됩니다.</li>
+    </ul>
+  </section>
+
+  <!-- ============================================================ -->
+  <h2>그래서 <code>PDL.xml</code>이 있는 것</h2>
+  <p>
+    위 “알아둘 점” 세 가지는 전부 <strong>같은 원인</strong>입니다 — <em>동일한 정보를 두 곳에 손으로 유지</em>하고 있다는 것.
+  </p>
+  <table>
+    <thead><tr><th>중복 대상</th><th>서버</th><th>클라이언트</th><th>드리프트</th></tr></thead>
+    <tbody>
+      <tr><td><code>PacketIterator</code>/<code>PacketList</code></td><td><code>ServerPacketHandler.h</code></td><td><code>ClientPacketHandler.h</code></td><td>발생함 (①)</td></tr>
+      <tr><td><code>PKT_S_TEST</code> 레이아웃</td><td><code>ServerPacketHandler.h</code></td><td><code>ClientPacketHandler.cpp</code></td><td>아직 일치</td></tr>
+      <tr><td><code>Validate()</code></td><td>없음</td><td>있음</td><td>비대칭</td></tr>
+      <tr><td>패킷 ID <code>enum</code></td><td><code>S_TEST = 1</code></td><td><code>S_TEST = 1</code></td><td>아직 일치</td></tr>
+    </tbody>
+  </table>
+  <p>
+    필드를 하나 추가하려면 지금은 <strong>구조체 2곳 + Validate + Writer 빌더 + Handler</strong>를 손으로 맞춰야 합니다.
+    <code>PDL.xml</code> 하나에서 이 전부를 생성하면 드리프트가 원천적으로 불가능해집니다.
+    Stage 5에서 코드 한 줄 없이 XML만 추가된 이유가 이것이고, 현재 로컬에서 <code>victims</code> 리스트를 XML에도 같이 반영한 이유이기도 합니다.
+  </p>
+
+  <div class="diagram">
+    <p class="diagram-title">최종 목표 — 한 곳에서 정의, 양쪽 생성</p>
+    <div class="flow flow-wide">
+      <div class="node warn">PDL.xml</div><span class="arrow">→</span>
+      <div class="node">코드 생성기</div><span class="arrow">→</span>
+      <div class="node server">ServerPacketHandler.h<br>(PKT_ + WRITE)</div>
+      <span class="arrow">+</span>
+      <div class="node">ClientPacketHandler.h<br>(PKT_ + Validate)</div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <h2>요약 표</h2>
+  <table>
+    <thead>
+      <tr><th>커밋</th><th>해결한 문제</th><th>도입한 것</th><th>남긴 문제</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>71e7a86</code></td>
+        <td>TCP에 메시지 경계가 없음</td>
+        <td><code>PacketHeader</code>, <code>PacketSession::OnRecv</code>, <code>sealed</code>/<code>abstract</code></td>
+        <td>오프셋 손계산 (<code>&amp;buffer[4]</code>)</td>
+      </tr>
+      <tr>
+        <td><code>258dc01</code></td>
+        <td>오프셋 손계산</td>
+        <td><code>BufferReader</code>/<code>BufferWriter</code>, <code>Reserve&lt;T&gt;()</code></td>
+        <td>읽기/쓰기 순서를 사람이 동기화</td>
+      </tr>
+      <tr>
+        <td><code>78d6e9a</code></td>
+        <td>직렬화 코드가 흩어짐</td>
+        <td><code>Make_XXX</code>/<code>Handle_XXX</code>, <code>Peek</code> 라우터, 리스트 count 접두</td>
+        <td>여전히 순서 규약 의존</td>
+      </tr>
+      <tr>
+        <td><code>f77cfdc</code></td>
+        <td>가변 길이 문자열·한글</td>
+        <td>길이 접두 + <code>WCHAR</code>, <code>wcout.imbue</code></td>
+        <td>고정 구조체와 공존 불가</td>
+      </tr>
+      <tr>
+        <td><code>747a555</code></td>
+        <td>순서 동기화 부담</td>
+        <td><code>#pragma pack(1)</code> 구조체, offset/count, <code>Validate()</code>, <code>PDL.xml</code></td>
+        <td>복사 + 커서 잔재로 오프셋 드리프트</td>
+      </tr>
+      <tr>
+        <td><code>62b9d7a</code></td>
+        <td>불필요한 복사·커서 이중 관리</td>
+        <td><code>reinterpret_cast</code> 제자리 읽기, <code>PacketList</code>/<code>PacketIterator</code></td>
+        <td>쓰는 쪽은 아직 흘려쓰기</td>
+      </tr>
+      <tr>
+        <td><strong>로컬</strong></td>
+        <td>중첩 리스트, 쓰기/읽기 비대칭</td>
+        <td><code>victimsOffset/Count</code>, 재귀 <code>Validate</code>, <code>PKT_S_TEST_WRITE</code>, <code>Reserve&lt;T&gt;(count)</code></td>
+        <td>두 벌 중복 → 코드 생성 필요</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <section class="sources">
+    <h2>참고 파일</h2>
+    <ul>
+      <li><code>ServerCore/Session.h</code>, <code>ServerCore/Session.cpp</code> — <code>PacketHeader</code>, <code>PacketSession</code></li>
+      <li><code>ServerCore/BufferReader.h/.cpp</code>, <code>ServerCore/BufferWriter.h/.cpp</code></li>
+      <li><code>GameServer/ServerPacketHandler.h/.cpp</code> — <code>PKT_S_TEST</code>, <code>PKT_S_TEST_WRITE</code></li>
+      <li><code>DummyClient/ClientPacketHandler.h/.cpp</code> — <code>PKT_S_TEST</code>, <code>PacketList</code></li>
+      <li><code>DummyClient/PDL.xml</code> — 패킷 정의 문서</li>
+      <li>관련 문서: <a href="packet-session-git-comparison.html">PacketSession 로컬 변경 분석</a> ·
+          <a href="buffer-reader-writer-git-comparison.html">BufferReader / BufferWriter 추가 분석</a> ·
+          <a href="tcp-byte-stream.html">TCP 바이트 스트림</a></li>
+    </ul>
+  </section>
+</main>
+<script src="script.js"></script>
+</body>
+</html>

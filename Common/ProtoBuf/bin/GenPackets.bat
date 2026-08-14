@@ -24,8 +24,8 @@ XCOPY /Y Struct.pb.cc "../../../DummyClient"
 XCOPY /Y Protocol.pb.h "../../../DummyClient"
 XCOPY /Y ServerPacketHandler.h "../../../DummyClient"
 
-DEL /S /Q /F *.pb.h
-DEL /S /Q /F *.pb.cc
-
+DEL /Q /F *.pb.h
+DEL /Q /F *.pb.cc
+DEL /Q /F *.h
 
 PAUSE

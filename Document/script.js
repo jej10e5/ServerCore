@@ -10,7 +10,8 @@
     { file: "iocp-overview.html", title: "IOCP Accept 흐름 Overview" },
     { file: "iocp-owner-dispatch.html", title: "IOCP owner 기반 Dispatch" },
     { file: "SendBuffer_Git_Comparison_Report.html", title: "SendBuffer Git 비교 보고서" },
-    { file: "packet-session-git-comparison.html", title: "PacketSession 로컬 변경 분석" }
+    { file: "packet-session-git-comparison.html", title: "PacketSession 로컬 변경 분석" },
+    { file: "packet-serialization-evolution.html", title: "패킷 조립부 → 직렬화 발전사" }
   ];
 
   const keywords = new Set([
@@ -28,7 +29,10 @@
     "WSABUF", "WSADATA", "WSAData", "WSAEVENT", "WSANETWORKEVENTS", "WSAOVERLAPPED",
     "int32", "uint32", "u_long", "vector", "IocpCore", "IocpEvent", "IocpObjectRef",
     "Session", "SessionRef", "PacketSession", "PacketSessionRef", "PacketHeader",
-    "SendBufferRef", "AcceptEvent", "RecvEvent", "ULONG_PTR"
+    "SendBufferRef", "AcceptEvent", "RecvEvent", "ULONG_PTR",
+    "uint16", "uint64", "wstring", "BufferReader", "BufferWriter", "SendBuffer",
+    "PacketList", "PacketIterator", "BuffsList", "BuffsListItem", "BuffsVictimsList",
+    "BuffData", "ListHeader", "GameSession", "ServerPacketHandler", "ClientPacketHandler"
   ]);
 
   function escapeHtml(value) {

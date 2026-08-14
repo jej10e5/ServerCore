@@ -24,7 +24,7 @@ public:
 	static void Init()
 	{
 		for (int32 i = 0; i < UINT16_MAX; i++)
-			GPacketHandler[0] = Handle_INVALID;
+			GPacketHandler[i] = Handle_INVALID;
 		GPacketHandler[PKT_C_TEST] = [](PacketSessionRef& session, BYTE* buffer, int32 len) {return HandlePacket<Protocol::C_TEST>(Handle_C_TEST, session, buffer, len); };
 	}
 
@@ -35,13 +35,14 @@ public:
 	}
 
 	//TODO : 자동화
-	static SendBufferRef MakeSendBuffer(Protocol::C_TEST& pkt) { return MakeSendBuffer(pkt, PKT_C_TEST); }
+	static SendBufferRef MakeSendBuffer(Protocol::S_TEST& pkt) { return MakeSendBuffer(pkt, PKT_S_TEST); }
+	static SendBufferRef MakeSendBuffer(Protocol::S_LOGIN& pkt) { return MakeSendBuffer(pkt, PKT_S_LOGIN); }
 private:
 	template<typename PacketType, typename ProcessFunc>
 	static bool HandlePacket(ProcessFunc func, PacketSessionRef& session, BYTE* buffer, int32 len)
 	{
 		PacketType pkt;
-		if (pkt.ParseFromArray(buffer + sizeof(PacketHeader), len - sizeof(PacketHeader)))
+		if (pkt.ParseFromArray(buffer + sizeof(PacketHeader), len - sizeof(PacketHeader))==false)
 			return false;
 
 		return func(session, pkt);
