@@ -14,10 +14,10 @@ public:
 		return ret;
 	}
 
-	void Push(JobRef job)
+	void Push(T& item)
 	{
 		WRITE_LOCK;
-		_items.push(job);
+		_items.push(item);
 	}
 	
 	void PopAll(OUT Vector<T>& items)
