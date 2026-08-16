@@ -10,49 +10,17 @@
 #include "Protocol.pb.h"
 #include "Job.h"
 #include "Room.h"
+#include "Player.h"
+#include<functional>
 
-void HealByValue(int64 target, int32 value)
+void HelloWorld(int32 a, int32 b)
 {
-	cout << target << "한테 힐" << value << "만큼 줌" << endl;
+	std::cout << "hello world!" << std::endl;
 }
-
-class Knight
-{
-public:
-	void HealMe(int32 value)
-	{
-		cout << "나한테 힐" << value << "만큼 줌" << endl;
-	}
-};
 
 int main()
 {
-	// 튜플 - 데이터 여러개를 한번에 저장
-	auto tup = std::tuple<int32, int32>(1, 2);
-	auto val0 = std::get<0>(tup); // 첫번째 인자
-	auto val1 = std::get<1>(tup); // 두번째 인자
-
-	auto s = gen_seq<3>();
-	// gen_seq<3>
-	// : gen_seq<2,2>		상속 -> N=2, Remains=2
-	// : gen_seq<1,1,2>		상속 -> N=1, Remains=1,2
-	// : gen_seq<0,0,1,2>	상속 -> Remains = 0,1,2
-	// : seq<0,1,2>
-
- 
-	// TEST JOB
-	{
-		FuncJob<void, int64, int32> job(HealByValue, 100, 10);
-		job.Execute();
-
-		Knight k1;
-		MemberJob job2(&k1, &Knight::HealMe, 10);
-		job2.Execute();
-		
-	}
-
-	//JOB
-
+	
 	ClientPacketHandler::Init();
 
 	ServerServiceRef service = MakeShared<ServerService>(
@@ -76,7 +44,7 @@ int main()
 
 	while (true)
 	{
-		GRoom.FlushJob();
+		GRoom->FlushJob();
 		this_thread::sleep_for(1ms);
 	}
 
