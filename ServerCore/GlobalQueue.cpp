@@ -17,5 +17,5 @@ void GlobalQueue::Push(JobQueueRef jobQueue)
 
 JobQueueRef GlobalQueue::Pop()
 {
-	return JobQueueRef();
+	return _jobQueues.Pop();
 }
