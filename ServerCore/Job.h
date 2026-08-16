@@ -22,6 +22,7 @@ public:
 			(owner.get()->* memFunc)(args...);
 		};
 	}
+
 	void Execute()
 	{
 		_callback();
