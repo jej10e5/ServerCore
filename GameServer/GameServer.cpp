@@ -11,23 +11,50 @@
 #include "Job.h"
 #include "Room.h"
 
+void HealByValue(int64 target, int32 value)
+{
+	cout << target << "한테 힐" << value << "만큼 줌" << endl;
+}
+
+class Knight
+{
+public:
+	void HealMe(int32 value)
+	{
+		cout << "나한테 힐" << value << "만큼 줌" << endl;
+	}
+};
+
 int main()
 {
+	// 튜플 - 데이터 여러개를 한번에 저장
+	auto tup = std::tuple<int32, int32>(1, 2);
+	auto val0 = std::get<0>(tup); // 첫번째 인자
+	auto val1 = std::get<1>(tup); // 두번째 인자
+
+	auto s = gen_seq<3>();
+	// gen_seq<3>
+	// : gen_seq<2,2>		상속 -> N=2, Remains=2
+	// : gen_seq<1,1,2>		상속 -> N=1, Remains=1,2
+	// : gen_seq<0,0,1,2>	상속 -> Remains = 0,1,2
+	// : seq<0,1,2>
+
+ 
 	// TEST JOB
 	{
-		// [일감 의뢰 내용] : 1번 유저한테 10만큼 힘을 줘라!
-		// 행동 : Heal
-		// 인자 : 1번 유저, 10이라는 힐량
-		HealJob healJob;
-		healJob._target = 1;
-		healJob._healValue = 10;
+		FuncJob<void, int64, int32> job(HealByValue, 100, 10);
+		job.Execute();
 
-		// 나~중에
-		healJob.Excute();
+		Knight k1;
+		MemberJob job2(&k1, &Knight::HealMe, 10);
+		job2.Execute();
+		
 	}
 
 	//JOB
+
 	ClientPacketHandler::Init();
+
 	ServerServiceRef service = MakeShared<ServerService>(
 		NetAddress(L"127.0.0.1", 7777),
 		MakeShared<IocpCore>(),

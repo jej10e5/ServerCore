@@ -30,6 +30,6 @@ void Room::FlushJob()
 		JobRef job = _jobs.Pop();
 		if (job == nullptr)
 			break;
-		job->Excute();
+		job->Execute();
 	}
 }
